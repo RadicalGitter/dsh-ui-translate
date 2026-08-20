@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ClientBackendRegistry, type ClientTranslationBackend } from '../src/client/backends.ts'
+import { ClientBackendRegistry, createDefaultClientBackends, type ClientTranslationBackend } from '../src/client/backends.ts'
 import { isSafeLeafTextNode, StaticDomTranslator } from '../src/client/dom-translator.ts'
 import { resolveSettings } from '../src/client/settings-model.ts'
 
@@ -74,6 +74,36 @@ describe('StaticDomTranslator', () => {
     expect(dom.window.document.querySelector('#skip')!.textContent).toBe('设置')
     translator.update(resolveSettings({ enabled: false }))
     expect(dom.window.document.querySelector('#label')!.textContent).toBe('  设置  ')
+    translator.dispose()
+  })
+
+  it('translates allowlisted pet panel labels and numeric templates offline', async () => {
+    vi.useFakeTimers()
+    const dom = createDom(`
+      <section data-dsh-plugin="pet">
+        <span id="rank">亲密度 幼鲸</span>
+        <span id="treats">小鱼干 ×0</span>
+        <span id="points">17 点</span>
+        <button id="feed">喂食</button>
+        <button id="rename">改名</button>
+        <button id="hide">隐藏</button>
+      </section>
+    `)
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      createDefaultClientBackends(),
+      resolveSettings({ enabled: true, backend: 'offline-glossary', targetLanguage: 'en' }),
+    )
+    translator.start()
+    await vi.runAllTimersAsync()
+
+    const text = (id: string) => dom.window.document.querySelector(id)!.textContent
+    expect(text('#rank')).toBe('Affinity Calf')
+    expect(text('#treats')).toBe('Treats ×0')
+    expect(text('#points')).toBe('17 pts')
+    expect(text('#feed')).toBe('Feed')
+    expect(text('#rename')).toBe('Rename')
+    expect(text('#hide')).toBe('Hide')
     translator.dispose()
   })
 

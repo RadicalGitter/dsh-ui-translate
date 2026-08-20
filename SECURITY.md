@@ -4,7 +4,7 @@
 
 - The plugin starts disabled.
 - The default offline glossary performs no network requests.
-- The DOM scanner considers only leaf text that exactly matches a compile-time allowlist of known Chinese DSH UI phrases after applying a conservative denylist. It does not read input values, textareas, contenteditable regions, code blocks, composer/editor subtrees, message/session/workspace/search content, or nodes marked `translate="no"` / `.notranslate`.
+- The DOM scanner considers only leaf text approved by a compile-time allowlist of known Chinese DSH UI phrases or narrowly bounded numeric pet templates after applying a conservative denylist. It does not read input values, textareas, contenteditable regions, code blocks, composer/editor subtrees, message/session/workspace/search content, or nodes marked `translate="no"` / `.notranslate`.
 - Translation caches are bounded and memory-only. They disappear when the page or Host process exits.
 - The OpenAI-compatible backend is opt-in. It receives only allowlisted UI phrases in a JSON array; it does not receive HTML, selectors, URLs, session ids, input values, novel user text, or surrounding page context.
 
@@ -20,7 +20,7 @@
 
 ## Residual risk
 
-DOM classification is conservative but still heuristic. Novel user-controlled text cannot be provider input because it is not in the compile-time source-phrase allowlist. A user-controlled value identical to a generic allowlisted label (for example, a session titled `设置`) contains no additional text beyond that public phrase; dynamic-region selectors still exclude known session, workspace, message, and search surfaces. Keep the offline backend unless you understand and accept the configured provider's retention policy.
+DOM classification is conservative but still heuristic. Novel user-controlled text cannot be provider input because it is neither in the compile-time source-phrase allowlist nor one of the digit-only pet count/point templates. A user-controlled value identical to a generic allowlisted label (for example, a session titled `设置`) contains no additional text beyond that public phrase; dynamic-region selectors still exclude known session, workspace, message, and search surfaces. Keep the offline backend unless you understand and accept the configured provider's retention policy.
 
 To prevent translation of a new subtree, mark its root with `translate="no"` or class `notranslate` and report the selector upstream.
 

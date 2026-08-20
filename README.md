@@ -8,7 +8,7 @@ The plugin is deliberately conservative:
 
 - disabled on first install;
 - defaults to an in-process offline glossary, so no page text leaves the browser;
-- considers only connected leaf text that exactly matches a compile-time allowlist of known DSH Chinese UI phrases;
+- considers only connected leaf text approved by a compile-time allowlist of known DSH Chinese UI phrases and narrowly bounded numeric pet templates;
 - changes only the `Text.data` value, never element structure, attributes, listeners, or React ownership;
 - skips `textarea`, `input`, `select`, `contenteditable`, `code`, `pre`, `[data-input-backdrop]`, forms, live regions, conversation/message regions, composer/editor-related subtrees, `translate="no"`, and `.notranslate`;
 - restores translated nodes when disabled or reconfigured;
@@ -20,7 +20,7 @@ The selectors and source-phrase allowlist are intentionally biased toward false 
 
 | Backend | Default | Network behavior |
 | --- | --- | --- |
-| Offline glossary | Yes | No network. Exact-matches common Chinese labels to English; unknown labels stay unchanged. |
+| Offline glossary | Yes | No network. Translates approved Chinese labels and bounded pet count/point templates to English; unknown labels stay unchanged. |
 | OpenAI-compatible | No | Sends only allowlisted UI phrases after the user explicitly selects this backend and enables translation. Calls run through a token-authenticated, same-origin, rate-limited, loopback-only Host route. |
 
 The OpenAI-compatible provider defaults to `http://127.0.0.1:11434/v1` and model `qwen2.5:7b`. Loopback, RFC1918, link-local, `.local`, and `host.docker.internal` endpoints are accepted. Public hosts require the explicit **Allow a public endpoint** setting and HTTPS.

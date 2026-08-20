@@ -1,4 +1,4 @@
-import { ENGLISH_GLOSSARY } from '../core/static-phrases.ts'
+import { translateKnownStaticPhraseToEnglish } from '../core/static-phrases.ts'
 import type { ResolvedUITranslateSettings } from './settings-model.ts'
 
 export interface ClientTranslationBackend {
@@ -11,7 +11,7 @@ export class OfflineGlossaryBackend implements ClientTranslationBackend {
 
   async translate(texts: readonly string[], settings: ResolvedUITranslateSettings): Promise<readonly string[]> {
     if (settings.targetLanguage !== 'en') return texts
-    return texts.map(text => ENGLISH_GLOSSARY[text] ?? text)
+    return texts.map(text => translateKnownStaticPhraseToEnglish(text) ?? text)
   }
 }
 

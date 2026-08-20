@@ -52,6 +52,16 @@ describe('translation route controls', () => {
     await expect(response.json()).resolves.toEqual({ ok: true, translations: ['Settings'] })
   })
 
+  it('accepts an authenticated allowlisted numeric pet template', async () => {
+    const provider: TranslationProvider = { id: 'openai-compatible', translate: async () => ['Treats ×12'] }
+    const { url, token } = await serve(provider)
+    const response = await fetch(`${url}/ui-translate/api/translate`, {
+      method: 'POST', headers: requestHeaders(url, token), body: body('小鱼干 ×12'),
+    })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ ok: true, translations: ['Treats ×12'] })
+  })
+
   it.each([
     ['missing token', (url: string, token: string) => ({ ...requestHeaders(url, token), 'x-dsh-ui-translate-token': '' })],
     ['cross-site fetch metadata', (url: string, token: string) => ({ ...requestHeaders(url, token), 'sec-fetch-site': 'cross-site' })],
