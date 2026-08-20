@@ -6,6 +6,13 @@ const CHINESE_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u
 const MAX_STATIC_TEXT_LENGTH = 160
 const CACHE_LIMIT = 800
 
+export const LOCAL_MODEL_STATIC_SELECTOR = [
+  '[data-dsh-translate="static"]',
+  '[data-dsh-plugin="pet"] [class*="bubbleWhisper" i]',
+  '[data-dsh-plugin="pet"] [class*="bubbleFeed" i]',
+  '[data-dsh-plugin="pet"] [class*="bubblePet" i]',
+].join(',')
+
 export const SKIP_SELECTOR = [
   'textarea',
   'input',
@@ -44,6 +51,7 @@ export const SKIP_SELECTOR = [
   '[class*="workspace-name" i]',
   '[class*="search-result" i]',
   '[class*="history-item" i]',
+  '[class*="nameCell" i]',
   '.markdown-body',
 ].join(',')
 
@@ -51,20 +59,29 @@ export function containsChinese(text: string): boolean {
   return CHINESE_RE.test(text)
 }
 
-export function isSafeLeafTextNode(node: Text): boolean {
+export function isSafeLeafTextNode(node: Text, allowBrowserLocalModelText = false): boolean {
   const parent = node.parentElement
   if (parent === null || !node.isConnected) return false
   const text = node.data.trim()
   if (text.length === 0 || text.length > MAX_STATIC_TEXT_LENGTH || !containsChinese(text)) return false
-  // The network-capable backend may receive only compile-time-known UI phrases.
-  // This prevents a novel session title, workspace name, or result snippet from
-  // becoming provider input even if future DSH markup lacks a denylist marker.
-  if (!isKnownStaticPhrase(text)) return false
+  // Network-capable backends receive only compile-time-known UI phrases. The
+  // browser-local model may process other short leaf copy because text never
+  // leaves its dedicated Worker, but the dynamic-content exclusions below
+  // still prevent mutation of user/session/message/composer surfaces.
+  const knownStaticPhrase = isKnownStaticPhrase(text)
+  if (!knownStaticPhrase && (!allowBrowserLocalModelText || parent.closest(LOCAL_MODEL_STATIC_SELECTOR) === null)) return false
   if (parent.children.length > 0) return false
   if (parent.isContentEditable || parent.hidden || parent.getAttribute('aria-hidden') === 'true') return false
   if (parent.closest(SKIP_SELECTOR) !== null) return false
   if (parent.closest('form') !== null) return false
-  if (parent.closest('[aria-live]') !== null) return false
+  const petRoot = parent.closest('[data-dsh-plugin="pet"]')
+  // Pet session bubbles are clickable buttons carrying a title and may contain
+  // session-derived text. Never translate them, even in the local model mode.
+  if (petRoot !== null && parent.closest('button[title]') !== null) return false
+  // Live regions are normally dynamic/private. A positively identified pet
+  // whisper is the sole local-only exception; ordinary status/session bubbles
+  // remain untouched.
+  if (parent.closest('[aria-live]') !== null && !(allowBrowserLocalModelText && parent.closest('[class*="bubbleWhisper" i]') !== null)) return false
   return true
 }
 
@@ -165,12 +182,13 @@ export class StaticDomTranslator {
   private collect(root: Node): Text[] {
     const view = this.document.defaultView
     if (view === null) return []
-    if (root.nodeType === view.Node.TEXT_NODE) return isSafeLeafTextNode(root as Text) ? [root as Text] : []
+    const allowBrowserLocalModelText = this.settings.backend === 'browser-opus-mt'
+    if (root.nodeType === view.Node.TEXT_NODE) return isSafeLeafTextNode(root as Text, allowBrowserLocalModelText) ? [root as Text] : []
     const walker = this.document.createTreeWalker(root, view.NodeFilter.SHOW_TEXT)
     const nodes: Text[] = []
     let current = walker.nextNode()
     while (current !== null) {
-      if (isSafeLeafTextNode(current as Text)) nodes.push(current as Text)
+      if (isSafeLeafTextNode(current as Text, allowBrowserLocalModelText)) nodes.push(current as Text)
       current = walker.nextNode()
     }
     return nodes
@@ -228,7 +246,7 @@ export class StaticDomTranslator {
       const value = translated.get(source)
       if (value === undefined || value === source || containsChinese(value)) continue
       for (const node of sourceNodes) {
-        if (!isSafeLeafTextNode(node)) continue
+        if (!isSafeLeafTextNode(node, this.settings.backend === 'browser-opus-mt')) continue
         const parts = splitWhitespace(node.data)
         if (parts.core !== source) continue
         const original = node.data

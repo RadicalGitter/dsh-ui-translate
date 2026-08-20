@@ -1,6 +1,6 @@
 {
   "name": "dsh-ui-translate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Privacy-first static Chinese UI translation for the DeepSeek Harness web interface",
   "type": "module",
   "engines": {
@@ -26,11 +26,14 @@
     "cordis.patch.yml",
     "README.md",
     "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_LICENSES",
     "LICENSE"
   ],
   "scripts": {
     "clean": "node scripts/clean.mjs",
-    "build": "npm run clean && tsc -b && tsdown",
+    "build": "npm run clean && tsc -b && tsdown && npm run copy:opus-assets",
+    "copy:opus-assets": "node scripts/copy-opus-assets.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "prepare": "npm run build",
@@ -74,6 +77,9 @@
   "dependencies": {
     "schemastery": "^3.18.0"
   },
+  "overrides": {
+    "sharp": "0.35.3"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.7",
@@ -90,6 +96,7 @@
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.7",
+    "@huggingface/transformers": "3.8.1",
     "@types/node": "^22.15.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",

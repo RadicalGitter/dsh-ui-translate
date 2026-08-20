@@ -1,6 +1,6 @@
 import z from 'schemastery'
 
-export const BACKENDS = ['offline-glossary', 'openai-compatible'] as const
+export const BACKENDS = ['offline-glossary', 'browser-opus-mt', 'openai-compatible'] as const
 export type BackendId = typeof BACKENDS[number]
 
 export const TARGET_LANGUAGES = ['en', 'sv', 'de', 'fr', 'es', 'ja', 'ko'] as const

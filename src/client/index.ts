@@ -22,7 +22,8 @@ export const inject = ['slots', 'locale', 'connection', 'settingsScope', 'remote
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-translate: dictionaries')
   const settingsScope = ctx.settingsScope.bind<UITranslateSettings>({ namespace: SETTINGS_NAMESPACE })
-  const translator = new StaticDomTranslator(document, createDefaultClientBackends(), resolveSettings(undefined))
+  const backends = createDefaultClientBackends()
+  const translator = new StaticDomTranslator(document, backends, resolveSettings(undefined))
 
   const sync = (): void => {
     const snapshot = settingsScope.getSnapshot()
@@ -35,6 +36,7 @@ export function apply(ctx: ClientContext): void {
     return () => {
       unsubscribe()
       translator.dispose()
+      backends.dispose()
     }
   }, 'ui-translate: DOM observer and settings scope')
 

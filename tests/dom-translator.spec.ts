@@ -39,6 +39,33 @@ describe('safe leaf selection', () => {
     expect(isSafeLeafTextNode(dom.window.document.querySelector('span')!.firstChild as Text)).toBe(false)
   })
 
+  it('allows broader copy only in a positively owned local-model surface', () => {
+    const dom = createDom('<div data-dsh-translate="static"><span id="owned">正在整理本地状态</span></div><span id="unmarked">未标记用户文本</span>')
+    const owned = dom.window.document.querySelector('#owned')!.firstChild as Text
+    const unmarked = dom.window.document.querySelector('#unmarked')!.firstChild as Text
+    expect(isSafeLeafTextNode(owned)).toBe(false)
+    expect(isSafeLeafTextNode(owned, true)).toBe(true)
+    expect(isSafeLeafTextNode(unmarked, true)).toBe(false)
+  })
+
+  it('keeps dynamic and user-controlled pet surfaces excluded in local mode', () => {
+    const dom = createDom(`
+      <div data-dsh-plugin="pet">
+        <span class="nameCell">中文宠物名</span>
+        <button title="Open session">用户会话内容</button>
+        <div id="chatter" class="kz2Bea_bubbleWhisper" aria-live="polite">嗯……让我捋捋</div>
+        <div id="status" class="kz2Bea_bubbleStatus" aria-live="polite">可能来自会话的状态</div>
+      </div>
+      <div data-session-id="private"><span id="session">秘密会话标题</span></div>
+    `)
+    const text = (selector: string) => dom.window.document.querySelector(selector)!.firstChild as Text
+    expect(isSafeLeafTextNode(text('.nameCell'), true)).toBe(false)
+    expect(isSafeLeafTextNode(text('button'), true)).toBe(false)
+    expect(isSafeLeafTextNode(text('#session'), true)).toBe(false)
+    expect(isSafeLeafTextNode(text('#status'), true)).toBe(false)
+    expect(isSafeLeafTextNode(text('#chatter'), true)).toBe(true)
+  })
+
   it.each([
     '<textarea>设置</textarea>',
     '<div contenteditable="true">设置</div>',

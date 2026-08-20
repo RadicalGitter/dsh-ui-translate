@@ -7,4 +7,9 @@ describe('privacy defaults', () => {
     expect(resolveConfig()).toMatchObject({ enabled: false, backend: 'offline-glossary', targetLanguage: 'en', allowRemoteEndpoint: false })
     expect(resolveSettings(undefined)).toMatchObject({ enabled: false, backend: 'offline-glossary', targetLanguage: 'en', allowRemoteEndpoint: false })
   })
+
+  it('accepts the explicit browser-local backend without changing the private default', () => {
+    expect(resolveConfig({ backend: 'browser-opus-mt', targetLanguage: 'en' })).toMatchObject({ backend: 'browser-opus-mt', targetLanguage: 'en' })
+    expect(resolveSettings({ backend: 'browser-opus-mt', targetLanguage: 'en' })).toMatchObject({ backend: 'browser-opus-mt', targetLanguage: 'en' })
+  })
 })

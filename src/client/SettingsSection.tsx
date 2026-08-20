@@ -1,7 +1,8 @@
 import { useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import type { UITranslateLocaleKey } from './locales.ts'
-import { BACKENDS, TARGET_LANGUAGES, resolveSettings, type UITranslateSettings } from './settings-model.ts'
+import { opusModelStatus, type OpusModelPhase } from './opus-status.ts'
+import { BACKENDS, TARGET_LANGUAGES, resolveSettings, type BackendId, type UITranslateSettings } from './settings-model.ts'
 
 export interface TranslationSettingsProps {
   settingsScope: SettingsScope<UITranslateSettings>
@@ -23,12 +24,26 @@ const LANGUAGE_LABELS: Record<string, string> = {
   en: 'English', sv: 'Svenska', de: 'Deutsch', fr: 'Français', es: 'Español', ja: '日本語', ko: '한국어',
 }
 
+const BACKEND_LABEL_KEYS: Record<BackendId, UITranslateLocaleKey> = {
+  'offline-glossary': 'settings.offline',
+  'browser-opus-mt': 'settings.opus',
+  'openai-compatible': 'settings.openai',
+}
+
+const OPUS_STATUS_KEYS: Record<OpusModelPhase, UITranslateLocaleKey> = {
+  idle: 'settings.opusIdle',
+  loading: 'settings.opusLoading',
+  ready: 'settings.opusReady',
+  error: 'settings.opusError',
+}
+
 export function TranslationSettingsSection({ settingsScope, t }: TranslationSettingsProps): ReactNode {
   const snapshot = useSyncExternalStore(
     settingsScope.subscribe.bind(settingsScope),
     settingsScope.getSnapshot.bind(settingsScope),
     settingsScope.getSnapshot.bind(settingsScope),
   )
+  const opusSnapshot = useSyncExternalStore(opusModelStatus.subscribe, opusModelStatus.getSnapshot, opusModelStatus.getSnapshot)
   const [saving, setSaving] = useState(false)
 
   if (snapshot.status === 'loading') return <div translate="no" className="notranslate">{t('settings.loading')}</div>
@@ -37,6 +52,10 @@ export function TranslationSettingsSection({ settingsScope, t }: TranslationSett
   const set = async (field: string, value: unknown): Promise<void> => {
     setSaving(true)
     try { await settingsScope.set(field, value) } finally { setSaving(false) }
+  }
+  const setBackend = async (backend: BackendId): Promise<void> => {
+    if (backend === 'browser-opus-mt' && settings.targetLanguage !== 'en') await set('targetLanguage', 'en')
+    await set('backend', backend)
   }
 
   return <section
@@ -56,17 +75,25 @@ export function TranslationSettingsSection({ settingsScope, t }: TranslationSett
     </div>
     <label style={styles.row}>
       <span style={styles.label}>{t('settings.target')}</span>
-      <select style={styles.control} value={settings.targetLanguage} disabled={saving} onChange={event => { void set('targetLanguage', event.currentTarget.value) }}>
-        {TARGET_LANGUAGES.map(id => <option key={id} value={id}>{LANGUAGE_LABELS[id]}</option>)}
+      <select style={styles.control} value={settings.targetLanguage} disabled={saving || settings.backend === 'browser-opus-mt'} onChange={event => { void set('targetLanguage', event.currentTarget.value) }}>
+        {(settings.backend === 'browser-opus-mt' ? ['en'] as const : TARGET_LANGUAGES).map(id => <option key={id} value={id}>{LANGUAGE_LABELS[id]}</option>)}
       </select>
     </label>
     <label style={styles.row}>
       <span style={styles.label}>{t('settings.backend')}</span>
-      <select style={styles.control} value={settings.backend} disabled={saving} onChange={event => { void set('backend', event.currentTarget.value) }}>
-        {BACKENDS.map(id => <option key={id} value={id}>{t(id === 'offline-glossary' ? 'settings.offline' : 'settings.openai')}</option>)}
+      <select style={styles.control} value={settings.backend} disabled={saving} onChange={event => { void setBackend(event.currentTarget.value as BackendId) }}>
+        {BACKENDS.map(id => <option key={id} value={id}>{t(BACKEND_LABEL_KEYS[id])}</option>)}
       </select>
     </label>
-    {settings.backend === 'offline-glossary' ? <div style={styles.callout}>{t('settings.offlineLimit')}</div> : <>
+    {settings.backend === 'offline-glossary' && <div style={styles.callout}>{t('settings.offlineLimit')}</div>}
+    {settings.backend === 'browser-opus-mt' && <div style={styles.callout}>
+      <div>{t('settings.opusInfo')}</div>
+      <div style={{ marginTop: 8 }}>
+        <strong>{t('settings.opusStatus')}:</strong> {t(OPUS_STATUS_KEYS[opusSnapshot.phase])}
+        {opusSnapshot.phase === 'loading' && opusSnapshot.progress !== undefined ? ` (${Math.round(opusSnapshot.progress)}%)` : ''}
+      </div>
+    </div>}
+    {settings.backend === 'openai-compatible' && <>
       <label style={styles.row}>
         <span style={styles.label}>{t('settings.endpoint')}</span>
         <input style={styles.control} type="url" value={settings.endpoint} disabled={saving} onChange={event => { void set('endpoint', event.currentTarget.value) }} />

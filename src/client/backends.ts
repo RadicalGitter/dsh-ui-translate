@@ -1,9 +1,11 @@
 import { translateKnownStaticPhraseToEnglish } from '../core/static-phrases.ts'
+import { BrowserLocalOpusBackend } from './opus-backend.ts'
 import type { ResolvedUITranslateSettings } from './settings-model.ts'
 
 export interface ClientTranslationBackend {
   readonly id: string
   translate(texts: readonly string[], settings: ResolvedUITranslateSettings, signal: AbortSignal): Promise<readonly string[]>
+  dispose?(): void
 }
 
 export class OfflineGlossaryBackend implements ClientTranslationBackend {
@@ -63,10 +65,16 @@ export class ClientBackendRegistry {
     if (backend === undefined) throw new Error(`translation backend is not available: ${id}`)
     return backend
   }
+
+  dispose(): void {
+    for (const backend of this.backends.values()) backend.dispose?.()
+    this.backends.clear()
+  }
 }
 
 export function createDefaultClientBackends(): ClientBackendRegistry {
   return new ClientBackendRegistry()
     .register(new OfflineGlossaryBackend())
+    .register(new BrowserLocalOpusBackend())
     .register(new HostOpenAICompatibleBackend())
 }

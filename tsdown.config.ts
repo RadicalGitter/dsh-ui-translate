@@ -53,4 +53,24 @@ const client: UserConfig = {
   },
 }
 
-export default [host, client]
+const opusWorker: UserConfig = {
+  name: 'dsh-ui-translate/opus-worker',
+  entry: { 'opus-worker': 'src/client/opus-worker.ts' },
+  outDir: 'lib',
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+  dts: false,
+  sourcemap: false,
+  clean: false,
+  codeSplitting: false,
+  deps: {
+    alwaysBundle: () => true,
+    onlyBundle: false,
+  },
+  outputOptions: {
+    entryFileNames: 'opus-worker.js',
+  },
+}
+
+export default [host, client, opusWorker]

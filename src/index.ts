@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { createOpusAssetHandler } from './assets.ts'
 import { Config as ConfigSchema, resolveConfig, type Config as UITranslateConfig } from './config.ts'
+import { OPUS_ASSET_PREFIX } from './core/opus.ts'
 import { OpenAICompatibleProvider, TranslationProviderRegistry } from './providers.ts'
 import { createTranslateHandler, TRANSLATE_ROUTE } from './route.ts'
 
@@ -36,9 +38,15 @@ export function apply(ctx: Context, config: UITranslateConfig = {}): void {
       path: TRANSLATE_ROUTE,
       handler: createTranslateHandler(current, providers, requestToken),
     })
+    const removeAssets = ctx.webServer.register({
+      kind: 'prefix',
+      path: OPUS_ASSET_PREFIX,
+      handler: createOpusAssetHandler(),
+    })
     return () => {
+      removeAssets()
       removeRoute()
       removeMeta()
     }
-  }, 'ui-translate: authenticated loopback translation route')
+  }, 'ui-translate: authenticated route and local-model assets')
 }
