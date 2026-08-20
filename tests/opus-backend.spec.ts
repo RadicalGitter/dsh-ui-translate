@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BrowserLocalOpusBackend, splitOpusText, type WorkerLike } from '../src/client/opus-backend.ts'
+import { BrowserLocalOpusBackend, sanitizeOpusTranslation, splitOpusText, type WorkerLike } from '../src/client/opus-backend.ts'
 import { opusModelStatus } from '../src/client/opus-status.ts'
 import { resolveSettings } from '../src/client/settings-model.ts'
 import type { OpusTranslateRequest, OpusWorkerMessage } from '../src/core/opus.ts'
@@ -66,12 +66,27 @@ describe('BrowserLocalOpusBackend', () => {
     backend.dispose()
   })
 
-  it('rejects blank model output instead of erasing a UI label', async () => {
+  it('reconstructs an unchanged long source without synthetic spaces when every segment falls back', async () => {
     const worker = new FakeWorker()
     const backend = new BrowserLocalOpusBackend(() => worker)
-    const promise = backend.translate(['嗯……让我捋捋'], settings, new AbortController().signal)
+    const source = '长消息'.repeat(140)
+    const promise = backend.translate([source], settings, new AbortController().signal)
+    const request = worker.messages[0]
+    worker.respond({ type: 'result', id: request.id, translations: [...request.texts] })
+    await expect(promise).resolves.toEqual([source])
+    backend.dispose()
+  })
+
+  it('keeps the source instead of applying blank or pathological model output', async () => {
+    const worker = new FakeWorker()
+    const backend = new BrowserLocalOpusBackend(() => worker)
+    const source = '梁神模式'
+    const promise = backend.translate([source], settings, new AbortController().signal)
     worker.respond({ type: 'result', id: worker.messages[0].id, translations: ['   '] })
-    await expect(promise).rejects.toThrow(/invalid translations/)
+    await expect(promise).resolves.toEqual([source])
+    expect(sanitizeOpusTranslation(`Liang God mode${'.'.repeat(80)}`, source)).toBe('Liang God mode...')
+    expect(sanitizeOpusTranslation('.'.repeat(80), source)).toBe(source)
+    expect(sanitizeOpusTranslation('word '.repeat(80), source)).toBe(source)
     backend.dispose()
   })
 

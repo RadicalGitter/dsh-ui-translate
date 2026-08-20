@@ -1,6 +1,6 @@
 {
   "name": "dsh-ui-translate",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Privacy-first browser-local Chinese UI and content translation for DeepSeek Harness Web",
   "type": "module",
   "engines": {

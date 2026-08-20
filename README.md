@@ -12,6 +12,7 @@ A privacy-first DeepSeek Harness Web plugin that can translate all visible Chine
 - Translated text receives a visible dashed highlight. Hovering it exposes exactly one contextual action: **Show original** while translated, then **Re-translate** after the original is shown. The control does not wrap or intercept the underlying link.
 - Translated session titles are presentation aliases: clicking them still opens the canonical thread through its unchanged ID/link. Free-text alias resolution by an agent is not yet provided.
 - Disabling or reconfiguring the plugin restores original text. Translation-result caches are bounded and memory-only; downloaded model assets use the browser cache.
+- Local inference runs progressively in small sequential batches: visible navigation, settings, and live-status text are prioritized ahead of conversation backlogs, and scrolling queues newly visible content.
 
 ## Backends
 
@@ -21,7 +22,7 @@ A privacy-first DeepSeek Harness Web plugin that can translate all visible Chine
 | Browser-local OPUS-MT | No | Chinese-to-English only. Translates all visible Chinese UI and content. On first use, downloads about 110 MB of pinned quantized model files from Hugging Face, caches them in the browser, and performs inference inside a dedicated local Worker. Page text is not uploaded. |
 | OpenAI-compatible | No | Sends only allowlisted UI phrases after the user explicitly selects this backend and enables translation. Calls run through a token-authenticated, same-origin, rate-limited, loopback-only Host route. |
 
-The browser-local backend uses `Xenova/opus-mt-zh-en` pinned to revision `39d480d52a9ea3065a1f117adfe4dbc55de10e6f`. Selecting it is explicit consent to download public model artifacts from Hugging Face. The model files are the only remote payload in this mode: source UI text and translations stay inside the browser Worker. Long messages are segmented into bounded sentences/chunks and reconstructed locally. Cancelling, disabling, reconfiguring, or unloading the plugin terminates active inference.
+The browser-local backend uses `Xenova/opus-mt-zh-en` pinned to revision `39d480d52a9ea3065a1f117adfe4dbc55de10e6f`. Selecting it is explicit consent to download public model artifacts from Hugging Face. The model files are the only remote payload in this mode: source UI text and translations stay inside the browser Worker. Long messages are segmented into bounded sentences/chunks and reconstructed locally. Cancelling, disabling, reconfiguring, or unloading the plugin terminates active inference. This compact local model can produce literal or awkward translations; pathological blank, excessively long, and repeated-punctuation output is discarded or normalized before it reaches the page.
 
 Translated text is visually marked through the browser Custom Highlight API, with an outlined-parent fallback where that API is unavailable. The floating control box lives outside React-owned content and shows one action at a time: reveal the original, then invalidate the local result cache and re-translate it.
 

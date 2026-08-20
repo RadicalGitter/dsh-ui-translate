@@ -77,20 +77,22 @@ function extractTranslations(value: unknown, expected: number): string[] {
     if (typeof candidate !== 'object' || candidate === null || typeof (candidate as { translation_text?: unknown }).translation_text !== 'string') {
       throw new Error('local model returned an invalid translation')
     }
-    const translated = (candidate as { translation_text: string }).translation_text.trim()
-    if (translated.length === 0 || translated.length > 1_000) throw new Error('local model returned an invalid translation')
-    return translated
+    return (candidate as { translation_text: string }).translation_text
   })
 }
 
 async function handle(value: unknown): Promise<void> {
-  let id = 0
+  let id = typeof value === 'object' && value !== null && Number.isSafeInteger((value as { id?: unknown }).id)
+    ? (value as { id: number }).id
+    : 0
   try {
     const request = validateRequest(value)
     id = request.id
     activeRequestId = id
     const translator = await getTranslator(id)
-    const output = await (translator as unknown as RunTranslation)(request.texts, { max_new_tokens: 512 })
+    const longest = Math.max(...request.texts.map(text => [...text].length))
+    const maxNewTokens = Math.min(512, Math.max(48, longest * 2 + 24))
+    const output = await (translator as unknown as RunTranslation)(request.texts, { max_new_tokens: maxNewTokens })
     const translations = extractTranslations(output, request.texts.length)
     scope.postMessage({ type: 'result', id, translations })
   } catch (error) {

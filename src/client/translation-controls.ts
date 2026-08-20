@@ -103,6 +103,7 @@ export class TranslationControls {
   }
 
   sync(nodes: Iterable<Text>): void {
+    if (this.active !== undefined && (!this.active.isConnected || this.options.getState(this.active) === undefined)) this.hide()
     const activeNodes = [...nodes].filter(node => node.isConnected && this.options.getState(node) !== undefined)
     const registry = this.registry()
     const HighlightCtor = (this.document.defaultView as HighlightWindow | null)?.Highlight
@@ -116,11 +117,7 @@ export class TranslationControls {
       }
       return
     }
-    const ranges = activeNodes.map(node => {
-      const range = this.document.createRange()
-      range.selectNodeContents(node)
-      return range
-    })
+    const ranges = activeNodes.map(node => this.visibleRange(node))
     if (ranges.length === 0) registry.delete(HIGHLIGHT_NAME)
     else registry.set(HIGHLIGHT_NAME, new HighlightCtor(...ranges))
   }
@@ -181,9 +178,17 @@ export class TranslationControls {
     this.actionButton.textContent = this.options.getState(this.active) === 'original' ? 'Re-translate' : 'Show original'
   }
 
-  private position(node: Text): void {
+  private visibleRange(node: Text): Range {
     const range = this.document.createRange()
-    range.selectNodeContents(node)
+    const start = node.data.length - node.data.trimStart().length
+    const end = node.data.trimEnd().length
+    range.setStart(node, Math.min(start, node.data.length))
+    range.setEnd(node, Math.max(start, end))
+    return range
+  }
+
+  private position(node: Text): void {
+    const range = this.visibleRange(node)
     const rect = range.getBoundingClientRect()
     const view = this.document.defaultView
     const width = this.bar.offsetWidth || 180

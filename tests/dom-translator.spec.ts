@@ -4,6 +4,46 @@ import { ClientBackendRegistry, createDefaultClientBackends, type ClientTranslat
 import { isSafeLeafTextNode, StaticDomTranslator } from '../src/client/dom-translator.ts'
 import { resolveSettings } from '../src/client/settings-model.ts'
 
+class DeferredBackend implements ClientTranslationBackend {
+  readonly id = 'browser-opus-mt'
+  readonly calls: string[][] = []
+  private readonly pending: Array<{ texts: string[]; resolve(value: string[]): void; reject(error: Error): void }> = []
+  active = 0
+  maximumActive = 0
+
+  translate(texts: readonly string[], _settings: unknown, signal: AbortSignal): Promise<readonly string[]> {
+    const values = [...texts]
+    this.calls.push(values)
+    this.active += 1
+    this.maximumActive = Math.max(this.maximumActive, this.active)
+    return new Promise<string[]>((resolve, reject) => {
+      const settle = (callback: () => void): void => {
+        this.active -= 1
+        callback()
+      }
+      const onAbort = (): void => settle(() => reject(new Error('aborted')))
+      signal.addEventListener('abort', onAbort, { once: true })
+      this.pending.push({
+        texts: values,
+        resolve: translated => {
+          signal.removeEventListener('abort', onAbort)
+          settle(() => resolve(translated))
+        },
+        reject: error => {
+          signal.removeEventListener('abort', onAbort)
+          settle(() => reject(error))
+        },
+      })
+    })
+  }
+
+  resolveNext(): void {
+    const request = this.pending.shift()
+    if (request === undefined) throw new Error('no pending translation')
+    request.resolve(request.texts.map((_, index) => `Translated ${this.calls.length}-${index}`))
+  }
+}
+
 class MockBackend implements ClientTranslationBackend {
   calls: string[][] = []
 
@@ -191,6 +231,61 @@ describe('StaticDomTranslator', () => {
     await vi.runAllTimersAsync()
     expect(session.textContent).toBe('Translated session title')
     expect(backend.calls.filter(call => call.includes('中文会话标题'))).toHaveLength(2)
+    session.remove()
+    await Promise.resolve()
+    expect(controls.style.display).toBe('none')
+    translator.dispose()
+  })
+
+  it('serializes progressive batches and prioritizes live/sidebar text over conversation backlog', async () => {
+    vi.useFakeTimers()
+    const messages = Array.from({ length: 12 }, (_, index) => `<article data-message-role="user"><p>消息内容${index}</p></article>`).join('')
+    const dom = createDom(`${messages}<div role="treeitem" id="sidebar">中文会话标题</div>`)
+    const backend = new DeferredBackend()
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      new ClientBackendRegistry().register(backend),
+      resolveSettings({ enabled: true, backend: 'browser-opus-mt', targetLanguage: 'en' }),
+    )
+    translator.start()
+    await vi.advanceTimersByTimeAsync(40)
+
+    expect(backend.calls).toHaveLength(1)
+    expect(backend.calls[0]).toContain('中文会话标题')
+    expect(backend.calls[0].length).toBeLessThanOrEqual(8)
+
+    const live = dom.window.document.createElement('div')
+    live.setAttribute('aria-live', 'polite')
+    live.textContent = '宠物实时状态'
+    dom.window.document.body.append(live)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(backend.calls).toHaveLength(1)
+
+    backend.resolveNext()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(backend.calls).toHaveLength(2)
+    expect(backend.calls[1]).toContain('宠物实时状态')
+    expect(backend.maximumActive).toBe(1)
+    translator.dispose()
+    await Promise.resolve()
+  })
+
+  it('defers hidden local text until it becomes visible and the viewport changes', async () => {
+    vi.useFakeTimers()
+    const dom = createDom('<div id="panel" style="display:none"><span id="label">中文会话标题</span></div>')
+    const backend = new MockBackend('browser-opus-mt')
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      new ClientBackendRegistry().register(backend),
+      resolveSettings({ enabled: true, backend: 'browser-opus-mt', targetLanguage: 'en' }),
+    )
+    translator.start()
+    await vi.runAllTimersAsync()
+    expect(backend.calls).toHaveLength(0)
+
+    ;(dom.window.document.querySelector('#panel') as HTMLElement).style.display = 'block'
+    await vi.runAllTimersAsync()
+    expect(dom.window.document.querySelector('#label')!.textContent).toBe('Translated session title')
     translator.dispose()
   })
 
@@ -242,6 +337,61 @@ describe('StaticDomTranslator', () => {
     translator.dispose()
   })
 
+  it('retries one transient backend failure instead of stranding stable text', async () => {
+    vi.useFakeTimers()
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const dom = createDom('<span id="label">中文会话标题</span>')
+    let calls = 0
+    const backend: ClientTranslationBackend = {
+      id: 'browser-opus-mt',
+      translate: async () => {
+        calls += 1
+        if (calls === 1) throw new Error('temporary failure')
+        return ['Translated session title']
+      },
+    }
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      new ClientBackendRegistry().register(backend),
+      resolveSettings({ enabled: true, backend: 'browser-opus-mt', targetLanguage: 'en' }),
+    )
+    translator.start()
+    await vi.runAllTimersAsync()
+    expect(calls).toBe(2)
+    expect(dom.window.document.querySelector('#label')!.textContent).toBe('Translated session title')
+    warning.mockRestore()
+    translator.dispose()
+  })
+
+  it('cooldown-caches persistent backend failures after one retry', async () => {
+    vi.useFakeTimers()
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const dom = createDom('<span>中文会话标题</span>')
+    let calls = 0
+    const backend: ClientTranslationBackend = {
+      id: 'browser-opus-mt',
+      translate: async () => {
+        calls += 1
+        throw new Error('persistent failure')
+      },
+    }
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      new ClientBackendRegistry().register(backend),
+      resolveSettings({ enabled: true, backend: 'browser-opus-mt', targetLanguage: 'en' }),
+    )
+    translator.start()
+    await vi.runAllTimersAsync()
+    expect(calls).toBe(2)
+    dom.window.document.dispatchEvent(new dom.window.Event('scroll', { bubbles: true }))
+    dom.window.document.dispatchEvent(new dom.window.Event('pointerup', { bubbles: true }))
+    dom.window.dispatchEvent(new dom.window.Event('resize'))
+    await vi.advanceTimersByTimeAsync(100)
+    expect(calls).toBe(2)
+    warning.mockRestore()
+    translator.dispose()
+  })
+
   it('aborts an active backend request when disabled', async () => {
     vi.useFakeTimers()
     const dom = createDom('<span>设置</span>')
@@ -264,6 +414,32 @@ describe('StaticDomTranslator', () => {
     translator.update(resolveSettings({ enabled: false }))
     expect(observedSignal?.aborted).toBe(true)
     expect(dom.window.document.querySelector('span')!.textContent).toBe('设置')
+    translator.dispose()
+  })
+
+  it('temporarily suppresses repeated inference when the model falls back to the source', async () => {
+    vi.useFakeTimers()
+    const dom = createDom('<span id="label">中文会话标题</span>')
+    let calls = 0
+    const backend: ClientTranslationBackend = {
+      id: 'browser-opus-mt',
+      translate: async texts => {
+        calls += 1
+        return [...texts]
+      },
+    }
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      new ClientBackendRegistry().register(backend),
+      resolveSettings({ enabled: true, backend: 'browser-opus-mt', targetLanguage: 'en' }),
+    )
+    translator.start()
+    await vi.runAllTimersAsync()
+    dom.window.document.dispatchEvent(new dom.window.Event('scroll', { bubbles: true }))
+    dom.window.dispatchEvent(new dom.window.Event('resize'))
+    await vi.advanceTimersByTimeAsync(100)
+    expect(calls).toBe(1)
+    expect(dom.window.document.querySelector('#label')!.textContent).toBe('中文会话标题')
     translator.dispose()
   })
 

@@ -21,6 +21,7 @@ export type OpusWorkerFactory = () => WorkerLike
 
 interface PendingRequest {
   expected: number
+  sources: string[]
   resolve(value: string[]): void
   reject(error: Error): void
 }
@@ -72,6 +73,13 @@ export function splitOpusText(value: string): OpusTextPart[] {
   })
 }
 
+export function sanitizeOpusTranslation(value: string, source: string): string {
+  const normalized = value.trim().replace(/([.!?。！？…])\1{3,}/gu, '$1$1$1')
+  const maximum = Math.max(120, [...source].length * 8)
+  if (normalized.length === 0 || normalized.length > maximum || !/[\p{L}\p{N}]/u.test(normalized)) return source
+  return normalized
+}
+
 export class BrowserLocalOpusBackend implements ClientTranslationBackend {
   readonly id = 'browser-opus-mt'
   private worker: WorkerLike | undefined
@@ -104,7 +112,11 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
       if (direct[index] !== undefined) return direct[index] as string
       const parts = plans[index]
       if (parts.length === 0) return text
-      return parts.map(part => part.prefix + (part.translate && part.continuation ? ' ' : '') + (part.translate ? translatedSegments.get(part.core) ?? part.core : part.core) + part.suffix).join('')
+      return parts.map(part => {
+        const translated = part.translate ? translatedSegments.get(part.core) ?? part.core : part.core
+        const separator = part.translate && part.continuation && translated !== part.core ? ' ' : ''
+        return part.prefix + separator + translated + part.suffix
+      }).join('')
     })
   }
 
@@ -130,6 +142,7 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
       signal.addEventListener('abort', onAbort, { once: true })
       this.pending.set(id, {
         expected: texts.length,
+        sources: [...texts],
         resolve: (value) => {
           signal.removeEventListener('abort', onAbort)
           resolve(value)
@@ -169,14 +182,15 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
     if (pending === undefined) return
     this.pending.delete(message.id as number)
     if (message.type === 'result') {
-      if (!Array.isArray(message.translations) || message.translations.length !== pending.expected || message.translations.some(item => typeof item !== 'string' || item.trim().length === 0 || item.length > 1_000)) {
+      if (!Array.isArray(message.translations) || message.translations.length !== pending.expected || message.translations.some(item => typeof item !== 'string')) {
         const error = new Error('local model worker returned invalid translations')
         opusModelStatus.set({ phase: 'error', detail: error.message })
         pending.reject(error)
         return
       }
+      const translations = (message.translations as string[]).map((item, index) => sanitizeOpusTranslation(item, pending.sources[index]))
       opusModelStatus.set({ phase: 'ready', progress: 100, detail: 'Local model ready' })
-      pending.resolve(message.translations as string[])
+      pending.resolve(translations)
     } else if (message.type === 'error' && typeof message.error === 'string') {
       const error = new Error(message.error)
       opusModelStatus.set({ phase: 'error', detail: error.message })
