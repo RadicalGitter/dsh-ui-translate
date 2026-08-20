@@ -1,4 +1,7 @@
+import type { TranslationMarkerStyle } from '../core/appearance.ts'
+
 export type TranslationDisplayState = 'translated' | 'original'
+export const TRANSLATION_HOVER_DELAY_MS = 650
 
 interface HighlightRegistryLike {
   set(name: string, highlight: unknown): void
@@ -14,6 +17,7 @@ interface LegacyCaretDocument {
 }
 
 export interface TranslationControlsOptions {
+  markerStyle: TranslationMarkerStyle
   getState(node: Text): TranslationDisplayState | undefined
   toggle(node: Text): void
   retranslate(node: Text): void
@@ -25,29 +29,25 @@ export class TranslationControls {
   private readonly bar: HTMLDivElement
   private readonly actionButton: HTMLButtonElement
   private readonly style: HTMLStyleElement
-  private readonly fallbackElements = new Set<Element>()
+  private readonly fallbackMarkers = new Set<HTMLElement>()
   private active: Text | undefined
+  private hoverNode: Text | undefined
   private hideTimer: number | undefined
+  private hoverTimer: number | undefined
+  private markerStyle: TranslationMarkerStyle
 
   constructor(private readonly document: Document, private readonly options: TranslationControlsOptions) {
+    this.markerStyle = options.markerStyle
     this.style = document.createElement('style')
     this.style.dataset.dshUiTranslateControls = 'true'
-    this.style.textContent = `
-      ::highlight(${HIGHLIGHT_NAME}) {
-        background: color-mix(in srgb, #7c3aed 14%, transparent);
-        text-decoration: underline 2px dashed #7c3aed;
-        text-decoration-skip-ink: none;
-      }
-      .dsh-ui-translate-fallback-highlight {
-        outline: 1px dashed #7c3aed !important;
-        outline-offset: 1px;
-      }
-    `
+    this.renderMarkerStyle()
 
     this.bar = document.createElement('div')
     this.bar.dataset.dshPlugin = 'ui-translate'
     this.bar.dataset.dshUiTranslateControls = 'true'
     this.bar.setAttribute('translate', 'no')
+    this.bar.setAttribute('role', 'toolbar')
+    this.bar.setAttribute('aria-label', 'Translation controls')
     Object.assign(this.bar.style, {
       position: 'fixed',
       zIndex: '2147483647',
@@ -70,8 +70,11 @@ export class TranslationControls {
       const node = this.active
       if (node === undefined) return
       if (this.options.getState(node) === 'original') {
+        const owner = node.parentElement
         this.hide()
         this.options.retranslate(node)
+        const HTMLElementCtor = this.document.defaultView?.HTMLElement
+        if (HTMLElementCtor !== undefined && owner instanceof HTMLElementCtor && owner.tabIndex >= 0) owner.focus({ preventScroll: true })
       } else {
         this.options.toggle(node)
         this.updateButtonLabel()
@@ -86,16 +89,29 @@ export class TranslationControls {
     this.document.head?.append(this.style)
     this.document.body?.append(this.bar)
     this.document.addEventListener('pointermove', this.onPointerMove, true)
-    this.document.defaultView?.addEventListener('scroll', this.hide, true)
-    this.document.defaultView?.addEventListener('resize', this.hide)
+    this.document.addEventListener('contextmenu', this.onContextMenu, true)
+    this.document.addEventListener('focusin', this.onFocusIn, true)
+    this.document.addEventListener('focusout', this.onFocusOut, true)
+    this.document.defaultView?.addEventListener('scroll', this.reset, true)
+    this.document.defaultView?.addEventListener('resize', this.reset)
+  }
+
+  setMarkerStyle(markerStyle: TranslationMarkerStyle): void {
+    if (this.markerStyle === markerStyle) return
+    this.markerStyle = markerStyle
+    this.renderMarkerStyle()
   }
 
   dispose(): void {
     this.cancelHide()
+    this.cancelHover()
     this.hide()
     this.document.removeEventListener('pointermove', this.onPointerMove, true)
-    this.document.defaultView?.removeEventListener('scroll', this.hide, true)
-    this.document.defaultView?.removeEventListener('resize', this.hide)
+    this.document.removeEventListener('contextmenu', this.onContextMenu, true)
+    this.document.removeEventListener('focusin', this.onFocusIn, true)
+    this.document.removeEventListener('focusout', this.onFocusOut, true)
+    this.document.defaultView?.removeEventListener('scroll', this.reset, true)
+    this.document.defaultView?.removeEventListener('resize', this.reset)
     this.registry()?.delete(HIGHLIGHT_NAME)
     this.clearFallbackHighlights()
     this.bar.remove()
@@ -103,18 +119,18 @@ export class TranslationControls {
   }
 
   sync(nodes: Iterable<Text>): void {
+    if (this.hoverNode !== undefined && (!this.hoverNode.isConnected || this.options.getState(this.hoverNode) === undefined)) this.cancelHover()
     if (this.active !== undefined && (!this.active.isConnected || this.options.getState(this.active) === undefined)) this.hide()
     const activeNodes = [...nodes].filter(node => node.isConnected && this.options.getState(node) !== undefined)
     const registry = this.registry()
     const HighlightCtor = (this.document.defaultView as HighlightWindow | null)?.Highlight
     this.clearFallbackHighlights()
+    if (this.markerStyle === 'none') {
+      registry?.delete(HIGHLIGHT_NAME)
+      return
+    }
     if (registry === undefined || HighlightCtor === undefined) {
-      for (const node of activeNodes) {
-        const parent = node.parentElement
-        if (parent === null) continue
-        parent.classList.add('dsh-ui-translate-fallback-highlight')
-        this.fallbackElements.add(parent)
-      }
+      for (const node of activeNodes) this.createFallbackMarkers(node)
       return
     }
     const ranges = activeNodes.map(node => this.visibleRange(node))
@@ -124,6 +140,7 @@ export class TranslationControls {
 
   showFor(node: Text): void {
     if (!node.isConnected || this.options.getState(node) === undefined) return
+    this.cancelHover()
     this.cancelHide()
     this.active = node
     this.updateButtonLabel()
@@ -134,9 +151,36 @@ export class TranslationControls {
   private readonly onPointerMove = (event: PointerEvent): void => {
     const target = event.target
     if (target !== null && typeof target === 'object' && 'nodeType' in target && this.bar.contains(target as Node)) return
-    const node = this.textAtPoint(event.clientX, event.clientY) ?? this.textFromTarget(target)
-    if (node !== undefined && this.options.getState(node) !== undefined) this.showFor(node)
-    else this.scheduleHide()
+    const node = this.textAtPoint(event.clientX, event.clientY) ?? this.textFromTarget(target, event.clientX, event.clientY)
+    if (node === undefined || this.options.getState(node) === undefined) {
+      this.cancelHover()
+      this.scheduleHide()
+      return
+    }
+    this.cancelHide()
+    if (this.active === node && this.bar.style.display !== 'none') return
+    if (this.active !== undefined) this.hide()
+    this.scheduleShow(node)
+  }
+
+  private readonly onContextMenu = (event: MouseEvent): void => {
+    const node = this.textAtPoint(event.clientX, event.clientY) ?? this.textFromTarget(event.target, event.clientX, event.clientY)
+    if (node === undefined || this.options.getState(node) === undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    this.showFor(node)
+  }
+
+  private readonly onFocusIn = (event: FocusEvent): void => {
+    if (event.target !== null && typeof event.target === 'object' && 'nodeType' in event.target && this.bar.contains(event.target as Node)) return
+    const node = this.firstTranslatedText(event.target)
+    if (node !== undefined) this.showFor(node)
+  }
+
+  private readonly onFocusOut = (event: FocusEvent): void => {
+    const next = event.relatedTarget
+    if (next !== null && typeof next === 'object' && 'nodeType' in next && this.bar.contains(next as Node)) return
+    this.reset()
   }
 
   private readonly hide = (): void => {
@@ -144,9 +188,36 @@ export class TranslationControls {
     this.bar.style.display = 'none'
   }
 
-  private scheduleHide(): void {
+  private readonly reset = (): void => {
+    this.cancelHover()
     this.cancelHide()
-    this.hideTimer = this.document.defaultView?.setTimeout(this.hide, 250)
+    this.hide()
+    if (this.registry() === undefined) this.clearFallbackHighlights()
+  }
+
+  private scheduleShow(node: Text): void {
+    if (this.hoverNode === node && this.hoverTimer !== undefined) return
+    this.cancelHover()
+    this.hoverNode = node
+    this.hoverTimer = this.document.defaultView?.setTimeout(() => {
+      this.hoverTimer = undefined
+      this.hoverNode = undefined
+      this.showFor(node)
+    }, TRANSLATION_HOVER_DELAY_MS)
+  }
+
+  private cancelHover(): void {
+    if (this.hoverTimer !== undefined) this.document.defaultView?.clearTimeout(this.hoverTimer)
+    this.hoverTimer = undefined
+    this.hoverNode = undefined
+  }
+
+  private scheduleHide(): void {
+    if (this.hideTimer !== undefined || this.active === undefined) return
+    this.hideTimer = this.document.defaultView?.setTimeout(() => {
+      this.hideTimer = undefined
+      this.hide()
+    }, 250)
   }
 
   private cancelHide(): void {
@@ -157,13 +228,18 @@ export class TranslationControls {
   private textAtPoint(x: number, y: number): Text | undefined {
     const position = this.document.caretPositionFromPoint?.(x, y)
     const candidate = position?.offsetNode ?? (this.document as unknown as LegacyCaretDocument).caretRangeFromPoint?.(x, y)?.startContainer
-    return candidate?.nodeType === this.document.defaultView?.Node.TEXT_NODE ? candidate as Text : undefined
+    if (candidate?.nodeType !== this.document.defaultView?.Node.TEXT_NODE) return undefined
+    const text = candidate as Text
+    return this.options.getState(text) !== undefined && this.containsPoint(text, x, y) ? text : undefined
   }
 
-  private textFromTarget(target: EventTarget | null): Text | undefined {
+  private firstTranslatedText(target: EventTarget | null): Text | undefined {
     if (target === null || typeof target !== 'object' || !('nodeType' in target)) return undefined
     const node = target as Node
-    if (node.nodeType === this.document.defaultView?.Node.TEXT_NODE) return node as Text
+    if (node.nodeType === this.document.defaultView?.Node.TEXT_NODE) {
+      const text = node as Text
+      return this.options.getState(text) !== undefined ? text : undefined
+    }
     const walker = this.document.createTreeWalker(node, this.document.defaultView?.NodeFilter.SHOW_TEXT ?? 4)
     let current = walker.nextNode()
     while (current !== null) {
@@ -171,6 +247,29 @@ export class TranslationControls {
       current = walker.nextNode()
     }
     return undefined
+  }
+
+  private textFromTarget(target: EventTarget | null, x: number, y: number): Text | undefined {
+    if (target === null || typeof target !== 'object' || !('nodeType' in target)) return undefined
+    const node = target as Node
+    if (node.nodeType === this.document.defaultView?.Node.TEXT_NODE) {
+      const text = node as Text
+      return this.options.getState(text) !== undefined && this.containsPoint(text, x, y) ? text : undefined
+    }
+    const walker = this.document.createTreeWalker(node, this.document.defaultView?.NodeFilter.SHOW_TEXT ?? 4)
+    let current = walker.nextNode()
+    while (current !== null) {
+      const text = current as Text
+      if (this.options.getState(text) !== undefined && this.containsPoint(text, x, y)) return text
+      current = walker.nextNode()
+    }
+    return undefined
+  }
+
+  private containsPoint(node: Text, x: number, y: number): boolean {
+    const range = this.visibleRange(node)
+    const rects = typeof range.getClientRects === 'function' ? [...range.getClientRects()] : [range.getBoundingClientRect()]
+    return rects.some(rect => rect.width > 0 && rect.height > 0 && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom)
   }
 
   private updateButtonLabel(): void {
@@ -198,6 +297,25 @@ export class TranslationControls {
     this.bar.style.top = `${top}px`
   }
 
+  private renderMarkerStyle(): void {
+    const overlay = this.markerStyle === 'overlay' || this.markerStyle === 'both'
+    const underline = this.markerStyle === 'underline' || this.markerStyle === 'both'
+    this.style.textContent = `
+      ::highlight(${HIGHLIGHT_NAME}) {
+        ${overlay ? 'background: color-mix(in srgb, #7c3aed 14%, transparent);' : ''}
+        ${underline ? 'text-decoration: underline 2px dashed #7c3aed; text-decoration-skip-ink: none;' : ''}
+      }
+      .dsh-ui-translate-fallback-marker {
+        position: fixed;
+        z-index: 2147483646;
+        pointer-events: none;
+        box-sizing: border-box;
+        ${overlay ? 'background: color-mix(in srgb, #7c3aed 14%, transparent); border-radius: 2px;' : ''}
+        ${underline ? 'border-bottom: 2px dashed #7c3aed;' : ''}
+      }
+    `
+  }
+
   private createButton(action: string): HTMLButtonElement {
     const button = this.document.createElement('button')
     button.type = 'button'
@@ -214,9 +332,31 @@ export class TranslationControls {
     return button
   }
 
+  private createFallbackMarkers(node: Text): void {
+    const range = this.visibleRange(node)
+    const rects = typeof range.getClientRects === 'function'
+      ? [...range.getClientRects()]
+      : typeof range.getBoundingClientRect === 'function' ? [range.getBoundingClientRect()] : []
+    for (const rect of rects) {
+      if (rect.width <= 0 || rect.height <= 0) continue
+      const marker = this.document.createElement('span')
+      marker.dataset.dshPlugin = 'ui-translate'
+      marker.dataset.dshUiTranslateFallbackMarker = 'true'
+      marker.className = 'dsh-ui-translate-fallback-marker'
+      Object.assign(marker.style, {
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+      })
+      this.document.body?.append(marker)
+      this.fallbackMarkers.add(marker)
+    }
+  }
+
   private clearFallbackHighlights(): void {
-    for (const element of this.fallbackElements) element.classList.remove('dsh-ui-translate-fallback-highlight')
-    this.fallbackElements.clear()
+    for (const marker of this.fallbackMarkers) marker.remove()
+    this.fallbackMarkers.clear()
   }
 
   private registry(): HighlightRegistryLike | undefined {

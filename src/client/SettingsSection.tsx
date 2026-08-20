@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore, type CSSProperties, type ReactNode } fr
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import type { UITranslateLocaleKey } from './locales.ts'
 import { opusModelStatus, type OpusModelPhase } from './opus-status.ts'
+import { TRANSLATION_MARKER_STYLES, type TranslationMarkerStyle } from '../core/appearance.ts'
 import { BACKENDS, TARGET_LANGUAGES, resolveSettings, type BackendId, type UITranslateSettings } from './settings-model.ts'
 
 export interface TranslationSettingsProps {
@@ -28,6 +29,13 @@ const BACKEND_LABEL_KEYS: Record<BackendId, UITranslateLocaleKey> = {
   'offline-glossary': 'settings.offline',
   'browser-opus-mt': 'settings.opus',
   'openai-compatible': 'settings.openai',
+}
+
+const MARKER_STYLE_LABEL_KEYS: Record<TranslationMarkerStyle, UITranslateLocaleKey> = {
+  overlay: 'settings.markerOverlay',
+  underline: 'settings.markerUnderline',
+  both: 'settings.markerBoth',
+  none: 'settings.markerNone',
 }
 
 const OPUS_STATUS_KEYS: Record<OpusModelPhase, UITranslateLocaleKey> = {
@@ -84,6 +92,13 @@ export function TranslationSettingsSection({ settingsScope, t }: TranslationSett
       <select style={styles.control} value={settings.backend} disabled={saving} onChange={event => { void setBackend(event.currentTarget.value as BackendId) }}>
         {BACKENDS.map(id => <option key={id} value={id}>{t(BACKEND_LABEL_KEYS[id])}</option>)}
       </select>
+    </label>
+    <label style={styles.row}>
+      <span style={styles.label}>{t('settings.marker')}</span>
+      <select style={styles.control} value={settings.markerStyle} disabled={saving} onChange={event => { void set('markerStyle', event.currentTarget.value as TranslationMarkerStyle) }}>
+        {TRANSLATION_MARKER_STYLES.map(id => <option key={id} value={id}>{t(MARKER_STYLE_LABEL_KEYS[id])}</option>)}
+      </select>
+      <span style={styles.hint}>{t('settings.markerHint')}</span>
     </label>
     {settings.backend === 'offline-glossary' && <div style={styles.callout}>{t('settings.offlineLimit')}</div>}
     {settings.backend === 'browser-opus-mt' && <div style={styles.callout}>

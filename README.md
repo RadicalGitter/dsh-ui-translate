@@ -9,7 +9,7 @@ A privacy-first DeepSeek Harness Web plugin that can translate all visible Chine
 - The explicitly selected browser-local OPUS-MT backend translates all connected visible Chinese text, including user-authored and session-derived content. Source text and translations stay inside a dedicated browser Worker and are never uploaded.
 - Editable/composer fields, `textarea`, `input`, `select`, `contenteditable`, code/preformatted content, `[data-input-backdrop]`, `translate="no"`, and `.notranslate` remain untouched to avoid corrupting authored or executable text.
 - Translation changes only `Text.data`; element structure, attributes, stable session/workspace IDs, links, listeners, and React ownership remain intact.
-- Translated text receives a visible dashed highlight. Hovering it exposes exactly one contextual action: **Show original** while translated, then **Re-translate** after the original is shown. The control does not wrap or intercept the underlying link.
+- Translated text receives a configurable marker: purple overlay (default), dashed underline, both, or none. Hovering directly over translated characters for about 0.65 seconds exposes exactly one contextual action: **Show original** while translated, then **Re-translate** after the original is shown. The control does not wrap or intercept the underlying link.
 - Translated session titles are presentation aliases: clicking them still opens the canonical thread through its unchanged ID/link. Free-text alias resolution by an agent is not yet provided.
 - Disabling or reconfiguring the plugin restores original text. Translation-result caches are bounded and memory-only; downloaded model assets use the browser cache.
 - Local inference runs progressively in small sequential batches: visible navigation, settings, and live-status text are prioritized ahead of conversation backlogs, and scrolling queues newly visible content.
@@ -24,7 +24,7 @@ A privacy-first DeepSeek Harness Web plugin that can translate all visible Chine
 
 The browser-local backend uses `Xenova/opus-mt-zh-en` pinned to revision `39d480d52a9ea3065a1f117adfe4dbc55de10e6f`. Selecting it is explicit consent to download public model artifacts from Hugging Face. The model files are the only remote payload in this mode: source UI text and translations stay inside the browser Worker. Long messages are segmented into bounded sentences/chunks and reconstructed locally. Cancelling, disabling, reconfiguring, or unloading the plugin terminates active inference. This compact local model can produce literal or awkward translations; pathological blank, excessively long, and repeated-punctuation output is discarded or normalized before it reaches the page.
 
-Translated text is visually marked through the browser Custom Highlight API, with an outlined-parent fallback where that API is unavailable. The floating control box lives outside React-owned content and shows one action at a time: reveal the original, then invalidate the local result cache and re-translate it.
+Translated text is visually marked through the browser Custom Highlight API, with plugin-owned range overlays where that API is unavailable. The floating control box lives outside React-owned content, requires a deliberate text hover, and shows one action at a time: reveal the original, then invalidate the local result cache and re-translate it.
 
 The OpenAI-compatible provider defaults to `http://127.0.0.1:11434/v1` and model `qwen2.5:7b`. Loopback, RFC1918, link-local, `.local`, and `host.docker.internal` endpoints are accepted. Public hosts require the explicit **Allow a public endpoint** setting and HTTPS.
 
@@ -62,7 +62,8 @@ The settings page exposes:
 - target language (default: English);
 - backend (default: offline glossary), including the opt-in browser-local OPUS-MT engine;
 - local-model download/initialization status when OPUS-MT is selected;
-- automatic highlights and per-text original/re-translate controls for translated content;
+- translation marker style: purple overlay (default), dashed underline, both, or none;
+- delayed-hover per-text original/re-translate controls for translated content;
 - OpenAI-compatible endpoint, model, and public-endpoint opt-in when that backend is selected.
 
 The same values can be supplied in a later Cordis patch:
@@ -73,6 +74,7 @@ The same values can be supplied in a later Cordis patch:
     enabled: true
     targetLanguage: en
     backend: openai-compatible
+    markerStyle: overlay
     endpoint: http://127.0.0.1:11434/v1
     model: qwen2.5:7b
     allowRemoteEndpoint: false

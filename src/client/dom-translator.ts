@@ -122,6 +122,7 @@ export class StaticDomTranslator {
   ) {
     this.settings = initialSettings
     this.controls = new TranslationControls(document, {
+      markerStyle: initialSettings.markerStyle,
       getState: node => this.displayState(node),
       toggle: node => this.toggleNode(node),
       retranslate: node => this.retranslateNode(node),
@@ -139,6 +140,14 @@ export class StaticDomTranslator {
   update(settings: ResolvedUITranslateSettings): void {
     const changed = JSON.stringify(settings) !== JSON.stringify(this.settings)
     if (!changed) return
+    const { markerStyle: previousMarkerStyle, ...previousBehavior } = this.settings
+    const { markerStyle: nextMarkerStyle, ...nextBehavior } = settings
+    if (previousMarkerStyle !== nextMarkerStyle && JSON.stringify(previousBehavior) === JSON.stringify(nextBehavior)) {
+      this.settings = settings
+      this.controls.setMarkerStyle(nextMarkerStyle)
+      this.syncControls()
+      return
+    }
     this.generation += 1
     this.abortActiveRequests()
     this.cancelScheduledFlush()
@@ -146,6 +155,7 @@ export class StaticDomTranslator {
     this.pendingRoots.clear()
     this.restore()
     this.settings = settings
+    this.controls.setMarkerStyle(settings.markerStyle)
     this.syncObserver()
   }
 
@@ -241,6 +251,13 @@ export class StaticDomTranslator {
     this.controls.sync(this.translatedNodes)
   }
 
+  private isOwnControlNode(node: Node): boolean {
+    const view = this.document.defaultView
+    if (view === null) return false
+    const element = node instanceof view.Element ? node : node.parentElement
+    return (element?.closest('[data-dsh-plugin="ui-translate"]') ?? null) !== null
+  }
+
   private syncObserver(): void {
     this.observer?.disconnect()
     this.observer = undefined
@@ -250,10 +267,11 @@ export class StaticDomTranslator {
     this.observer = new MutationObserverCtor((mutations) => {
       let removedNodes = false
       for (const mutation of mutations) {
-        if (mutation.type === 'characterData') this.queue(mutation.target)
-        else if (mutation.type === 'childList') {
-          for (const node of mutation.addedNodes) this.queue(node)
-          if (mutation.removedNodes.length > 0) removedNodes = true
+        if (mutation.type === 'characterData') {
+          if (!this.isOwnControlNode(mutation.target)) this.queue(mutation.target)
+        } else if (mutation.type === 'childList') {
+          for (const node of mutation.addedNodes) if (!this.isOwnControlNode(node)) this.queue(node)
+          if ([...mutation.removedNodes].some(node => !this.isOwnControlNode(node))) removedNodes = true
         } else if (mutation.target instanceof this.document.defaultView!.Element && mutation.target.closest('[data-dsh-plugin="ui-translate"]') === null) {
           this.queue(mutation.target)
         }

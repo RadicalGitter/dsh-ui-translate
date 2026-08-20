@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ClientBackendRegistry, createDefaultClientBackends, type ClientTranslationBackend } from '../src/client/backends.ts'
 import { isSafeLeafTextNode, StaticDomTranslator } from '../src/client/dom-translator.ts'
 import { resolveSettings } from '../src/client/settings-model.ts'
+import { TRANSLATION_HOVER_DELAY_MS } from '../src/client/translation-controls.ts'
 
 class DeferredBackend implements ClientTranslationBackend {
   readonly id = 'browser-opus-mt'
@@ -70,6 +71,9 @@ afterEach(() => {
 
 function createDom(html: string): JSDOM {
   const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, { url: 'http://127.0.0.1:3080/' })
+  const rect = { left: 10, right: 120, top: 10, bottom: 28, width: 110, height: 18, x: 10, y: 10, toJSON: () => ({}) }
+  Object.defineProperty(dom.window.Range.prototype, 'getBoundingClientRect', { configurable: true, value: () => rect })
+  Object.defineProperty(dom.window.Range.prototype, 'getClientRects', { configurable: true, value: () => [rect] })
   windows.push(dom)
   return dom
 }
@@ -201,7 +205,8 @@ describe('StaticDomTranslator', () => {
     expect(dom.window.document.querySelector('#search')!.textContent).toBe('Translated search result')
     expect(session.dataset.sessionId).toBe('session-123')
     expect(session.getAttribute('href')).toBe('/sessions/session-123')
-    expect(session.classList.contains('dsh-ui-translate-fallback-highlight')).toBe(true)
+    expect(session.classList.contains('dsh-ui-translate-fallback-highlight')).toBe(false)
+    expect(dom.window.document.querySelectorAll('[data-dsh-ui-translate-fallback-marker="true"]')).not.toHaveLength(0)
 
     let clicked = 0
     session.addEventListener('click', event => { event.preventDefault(); clicked += 1 })
@@ -209,21 +214,57 @@ describe('StaticDomTranslator', () => {
     expect(clicked).toBe(1)
 
     const textNode = session.firstChild as Text
+    const workspaceNode = dom.window.document.querySelector('#workspace')!.firstChild as Text
     textNode.data = '中文会话标题'
     await vi.runAllTimersAsync()
     expect(session.textContent).toBe('Translated session title')
 
     Object.defineProperty(dom.window.document, 'caretPositionFromPoint', { configurable: true, value: () => ({ offsetNode: textNode }) })
-    Object.defineProperty(dom.window.Range.prototype, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => ({ left: 10, right: 120, top: 10, bottom: 28, width: 110, height: 18, x: 10, y: 10, toJSON: () => ({}) }),
-    })
-    dom.window.document.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 20, clientY: 20 }))
+    const textRect = { left: 10, right: 120, top: 10, bottom: 28, width: 110, height: 18, x: 10, y: 10, toJSON: () => ({}) }
+    const workspaceRect = { left: 140, right: 260, top: 10, bottom: 28, width: 120, height: 18, x: 140, y: 10, toJSON: () => ({}) }
+    const rangeRect = function (this: Range): typeof textRect { return this.startContainer === workspaceNode ? workspaceRect : textRect }
+    Object.defineProperty(dom.window.Range.prototype, 'getBoundingClientRect', { configurable: true, value: rangeRect })
+    Object.defineProperty(dom.window.Range.prototype, 'getClientRects', { configurable: true, value: function (this: Range) { return [rangeRect.call(this)] } })
     const controls = dom.window.document.querySelector('[data-dsh-ui-translate-controls="true"]:not(style)') as HTMLDivElement
+    session.focus()
+    expect(controls.style.display).toBe('flex')
+    session.blur()
+    expect(controls.style.display).toBe('none')
+    const contextMenu = new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })
+    dom.window.document.dispatchEvent(contextMenu)
+    expect(contextMenu.defaultPrevented).toBe(true)
+    expect(controls.style.display).toBe('flex')
+    dom.window.dispatchEvent(new dom.window.Event('scroll'))
+    expect(controls.style.display).toBe('none')
+
+    dom.window.document.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 300, clientY: 20 }))
+    await vi.advanceTimersByTimeAsync(TRANSLATION_HOVER_DELAY_MS)
+    expect(controls.style.display).toBe('none')
+    dom.window.document.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 20, clientY: 20 }))
+    await vi.advanceTimersByTimeAsync(TRANSLATION_HOVER_DELAY_MS / 2)
+    dom.window.document.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 300, clientY: 20 }))
+    await vi.advanceTimersByTimeAsync(TRANSLATION_HOVER_DELAY_MS)
+    expect(controls.style.display).toBe('none')
+    dom.window.document.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 20, clientY: 20 }))
+    await vi.advanceTimersByTimeAsync(TRANSLATION_HOVER_DELAY_MS - 1)
+    expect(controls.style.display).toBe('none')
+    await vi.advanceTimersByTimeAsync(1)
     expect(controls.style.display).toBe('flex')
     const action = controls.querySelector('[data-action="translation-action"]') as HTMLButtonElement
     expect(action.textContent).toBe('Show original')
     expect(controls.querySelectorAll('button')).toHaveLength(1)
+
+    dom.window.document.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 160, clientY: 20 }))
+    expect(controls.style.display).toBe('none')
+    action.click()
+    expect(session.textContent).toBe('Translated session title')
+    await vi.advanceTimersByTimeAsync(TRANSLATION_HOVER_DELAY_MS)
+    expect(controls.style.display).toBe('flex')
+
+    dom.window.document.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 20, clientY: 20 }))
+    expect(controls.style.display).toBe('none')
+    await vi.advanceTimersByTimeAsync(TRANSLATION_HOVER_DELAY_MS)
+    expect(controls.style.display).toBe('flex')
     action.click()
     expect(session.textContent).toBe('中文会话标题')
     expect(action.textContent).toBe('Re-translate')
@@ -234,6 +275,63 @@ describe('StaticDomTranslator', () => {
     session.remove()
     await Promise.resolve()
     expect(controls.style.display).toBe('none')
+    translator.dispose()
+  })
+
+  it('updates marker appearance without retranslating content', async () => {
+    vi.useFakeTimers()
+    const dom = createDom('<span id="label">中文会话标题</span>')
+    const backend = new MockBackend('browser-opus-mt')
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      new ClientBackendRegistry().register(backend),
+      resolveSettings({ enabled: true, backend: 'browser-opus-mt', markerStyle: 'overlay' }),
+    )
+    translator.start()
+    await vi.runAllTimersAsync()
+
+    const label = dom.window.document.querySelector('#label') as HTMLElement
+    const style = dom.window.document.querySelector('style[data-dsh-ui-translate-controls="true"]') as HTMLStyleElement
+    expect(style.textContent).not.toContain('underline 2px dashed')
+    expect(label.classList.contains('dsh-ui-translate-fallback-highlight')).toBe(false)
+    expect(dom.window.document.querySelectorAll('[data-dsh-ui-translate-fallback-marker="true"]')).not.toHaveLength(0)
+
+    translator.update(resolveSettings({ enabled: true, backend: 'browser-opus-mt', markerStyle: 'underline' }))
+    expect(style.textContent).toContain('underline 2px dashed #7c3aed')
+    expect(style.textContent).not.toContain('background: color-mix')
+    expect(backend.calls).toHaveLength(1)
+
+    translator.update(resolveSettings({ enabled: true, backend: 'browser-opus-mt', markerStyle: 'none' }))
+    expect(dom.window.document.querySelectorAll('[data-dsh-ui-translate-fallback-marker="true"]')).toHaveLength(0)
+    expect(backend.calls).toHaveLength(1)
+
+    translator.update(resolveSettings({ enabled: true, backend: 'browser-opus-mt', markerStyle: 'both' }))
+    expect(dom.window.document.querySelectorAll('[data-dsh-ui-translate-fallback-marker="true"]')).not.toHaveLength(0)
+    expect(backend.calls).toHaveLength(1)
+    translator.dispose()
+  })
+
+  it('uses Custom Highlight ranges without mutating translated source elements', async () => {
+    vi.useFakeTimers()
+    const dom = createDom('<p id="mixed">Prefix <span id="label">中文会话标题</span> suffix</p>')
+    const registry = { set: vi.fn(), delete: vi.fn() }
+    Object.defineProperty(dom.window, 'CSS', { configurable: true, value: { highlights: registry } })
+    Object.defineProperty(dom.window, 'Highlight', { configurable: true, value: class Highlight { constructor(..._ranges: Range[]) {} } })
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      new ClientBackendRegistry().register(new MockBackend('browser-opus-mt')),
+      resolveSettings({ enabled: true, backend: 'browser-opus-mt', markerStyle: 'overlay' }),
+    )
+    translator.start()
+    await vi.runAllTimersAsync()
+
+    expect(registry.set).toHaveBeenCalled()
+    expect(dom.window.document.querySelector('#mixed')!.getAttribute('class')).toBeNull()
+    expect(dom.window.document.querySelector('#label')!.getAttribute('class')).toBeNull()
+    expect(dom.window.document.querySelectorAll('[data-dsh-ui-translate-fallback-marker="true"]')).toHaveLength(0)
+
+    translator.update(resolveSettings({ enabled: true, backend: 'browser-opus-mt', markerStyle: 'none' }))
+    expect(registry.delete).toHaveBeenCalledWith('dsh-ui-translate-visible')
     translator.dispose()
   })
 

@@ -1,4 +1,5 @@
 import z from 'schemastery'
+import { DEFAULT_TRANSLATION_MARKER_STYLE, TRANSLATION_MARKER_STYLES, type TranslationMarkerStyle } from './core/appearance.ts'
 
 export const BACKENDS = ['offline-glossary', 'browser-opus-mt', 'openai-compatible'] as const
 export type BackendId = typeof BACKENDS[number]
@@ -25,6 +26,8 @@ export interface Config {
   allowRemoteEndpoint?: boolean
   /** Environment variable containing the optional bearer token. */
   apiKeyEnv?: string
+  /** Visual marker applied to translated text. */
+  markerStyle?: TranslationMarkerStyle
 }
 
 export const Config: z<Config> = z.object({
@@ -35,6 +38,7 @@ export const Config: z<Config> = z.object({
   model: z.string().default(DEFAULT_MODEL),
   allowRemoteEndpoint: z.boolean().default(false),
   apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
+  markerStyle: z.union(TRANSLATION_MARKER_STYLES).default(DEFAULT_TRANSLATION_MARKER_STYLE),
 })
 
 export interface ResolvedConfig {
@@ -45,6 +49,7 @@ export interface ResolvedConfig {
   model: string
   allowRemoteEndpoint: boolean
   apiKeyEnv: string
+  markerStyle: TranslationMarkerStyle
 }
 
 export function resolveConfig(config: Config = {}): ResolvedConfig {
@@ -56,5 +61,6 @@ export function resolveConfig(config: Config = {}): ResolvedConfig {
     model: config.model ?? DEFAULT_MODEL,
     allowRemoteEndpoint: config.allowRemoteEndpoint ?? false,
     apiKeyEnv: config.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
+    markerStyle: config.markerStyle ?? DEFAULT_TRANSLATION_MARKER_STYLE,
   }
 }

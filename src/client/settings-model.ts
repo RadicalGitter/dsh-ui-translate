@@ -1,3 +1,5 @@
+import { DEFAULT_TRANSLATION_MARKER_STYLE, type TranslationMarkerStyle } from '../core/appearance.ts'
+
 export const BACKENDS = ['offline-glossary', 'browser-opus-mt', 'openai-compatible'] as const
 export type BackendId = typeof BACKENDS[number]
 
@@ -12,6 +14,7 @@ export interface UITranslateSettings {
   model?: string
   allowRemoteEndpoint?: boolean
   apiKeyEnv?: string
+  markerStyle?: TranslationMarkerStyle
 }
 
 export interface ResolvedUITranslateSettings {
@@ -22,6 +25,7 @@ export interface ResolvedUITranslateSettings {
   model: string
   allowRemoteEndpoint: boolean
   apiKeyEnv: string
+  markerStyle: TranslationMarkerStyle
 }
 
 export function resolveSettings(value: UITranslateSettings | undefined): ResolvedUITranslateSettings {
@@ -33,5 +37,6 @@ export function resolveSettings(value: UITranslateSettings | undefined): Resolve
     model: value?.model ?? 'qwen2.5:7b',
     allowRemoteEndpoint: value?.allowRemoteEndpoint ?? false,
     apiKeyEnv: value?.apiKeyEnv ?? 'DSH_UI_TRANSLATE_API_KEY',
+    markerStyle: value?.markerStyle ?? DEFAULT_TRANSLATION_MARKER_STYLE,
   }
 }
