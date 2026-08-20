@@ -1,0 +1,6 @@
+# Bundle patch for dsh-ui-translate. One row mounts the Host settings/API half;
+# the DSH client module scanner discovers this package's dsh.client declaration
+# and serves lib/client.js to the Web GUI.
+- insert:
+    - id: ui-translate
+      name: dsh-ui-translate
