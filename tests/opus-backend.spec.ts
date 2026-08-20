@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BrowserLocalOpusBackend, type WorkerLike } from '../src/client/opus-backend.ts'
+import { BrowserLocalOpusBackend, splitOpusText, type WorkerLike } from '../src/client/opus-backend.ts'
 import { opusModelStatus } from '../src/client/opus-status.ts'
 import { resolveSettings } from '../src/client/settings-model.ts'
 import type { OpusTranslateRequest, OpusWorkerMessage } from '../src/core/opus.ts'
@@ -45,6 +45,24 @@ describe('BrowserLocalOpusBackend', () => {
     worker.respond({ type: 'result', id: worker.messages[0].id, translations: ['Hmm... let me think.'] })
     await expect(promise).resolves.toEqual(['Hmm... let me think.'])
     expect(opusModelStatus.getSnapshot().phase).toBe('ready')
+    backend.dispose()
+  })
+
+  it('segments long messages and preserves non-Chinese spans', async () => {
+    const worker = new FakeWorker()
+    const backend = new BrowserLocalOpusBackend(() => worker)
+    const source = `${'长消息'.repeat(140)}。English only.\n第二句！`
+    const parts = splitOpusText(source)
+    expect(parts.filter(part => part.translate).every(part => part.core.length <= 320)).toBe(true)
+
+    const promise = backend.translate([source], settings, new AbortController().signal)
+    const request = worker.messages[0]
+    expect(request.texts.length).toBeGreaterThan(1)
+    expect(request.texts.every(text => text.length <= 320)).toBe(true)
+    worker.respond({ type: 'result', id: request.id, translations: request.texts.map((_text, index) => `Translated ${index}.`) })
+    const [translated] = await promise
+    expect(translated).toContain('English only.\n')
+    expect(translated).not.toContain('长消息')
     backend.dispose()
   })
 

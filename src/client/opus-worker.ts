@@ -90,7 +90,7 @@ async function handle(value: unknown): Promise<void> {
     id = request.id
     activeRequestId = id
     const translator = await getTranslator(id)
-    const output = await (translator as unknown as RunTranslation)(request.texts, { max_new_tokens: 192 })
+    const output = await (translator as unknown as RunTranslation)(request.texts, { max_new_tokens: 512 })
     const translations = extractTranslations(output, request.texts.length)
     scope.postMessage({ type: 'result', id, translations })
   } catch (error) {

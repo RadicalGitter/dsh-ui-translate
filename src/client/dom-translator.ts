@@ -1,19 +1,16 @@
 import type { ClientBackendRegistry } from './backends.ts'
 import { isKnownStaticPhrase } from '../core/static-phrases.ts'
 import type { ResolvedUITranslateSettings } from './settings-model.ts'
+import { TranslationControls, type TranslationDisplayState } from './translation-controls.ts'
 
 const CHINESE_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u
 const MAX_STATIC_TEXT_LENGTH = 160
+const MAX_CACHE_TEXT_LENGTH = 20_000
 const CACHE_LIMIT = 800
 
-export const LOCAL_MODEL_STATIC_SELECTOR = [
-  '[data-dsh-translate="static"]',
-  '[data-dsh-plugin="pet"] [class*="bubbleWhisper" i]',
-  '[data-dsh-plugin="pet"] [class*="bubbleFeed" i]',
-  '[data-dsh-plugin="pet"] [class*="bubblePet" i]',
-].join(',')
-
-export const SKIP_SELECTOR = [
+// These surfaces are never mutated. They are either actively editable or
+// executable/verbatim content where translation would corrupt user input.
+export const ALWAYS_SKIP_SELECTOR = [
   'textarea',
   'input',
   'select',
@@ -39,6 +36,12 @@ export const SKIP_SELECTOR = [
   '[class*="composer" i]',
   '[class*="prompt-editor" i]',
   '[class*="contenteditable" i]',
+].join(',')
+
+// Network-backed and glossary modes retain the original private-content
+// boundary. Only the explicitly selected browser-local model may translate
+// these visible content surfaces.
+export const REMOTE_CONTENT_SKIP_SELECTOR = [
   '[data-message-role]',
   '[data-message-id]',
   '[data-dsh-message]',
@@ -63,25 +66,21 @@ export function isSafeLeafTextNode(node: Text, allowBrowserLocalModelText = fals
   const parent = node.parentElement
   if (parent === null || !node.isConnected) return false
   const text = node.data.trim()
-  if (text.length === 0 || text.length > MAX_STATIC_TEXT_LENGTH || !containsChinese(text)) return false
-  // Network-capable backends receive only compile-time-known UI phrases. The
-  // browser-local model may process other short leaf copy because text never
-  // leaves its dedicated Worker, but the dynamic-content exclusions below
-  // still prevent mutation of user/session/message/composer surfaces.
-  const knownStaticPhrase = isKnownStaticPhrase(text)
-  if (!knownStaticPhrase && (!allowBrowserLocalModelText || parent.closest(LOCAL_MODEL_STATIC_SELECTOR) === null)) return false
-  if (parent.children.length > 0) return false
+  if (text.length === 0 || (!allowBrowserLocalModelText && text.length > MAX_STATIC_TEXT_LENGTH) || !containsChinese(text)) return false
   if (parent.isContentEditable || parent.hidden || parent.getAttribute('aria-hidden') === 'true') return false
-  if (parent.closest(SKIP_SELECTOR) !== null) return false
-  if (parent.closest('form') !== null) return false
-  const petRoot = parent.closest('[data-dsh-plugin="pet"]')
-  // Pet session bubbles are clickable buttons carrying a title and may contain
-  // session-derived text. Never translate them, even in the local model mode.
-  if (petRoot !== null && parent.closest('button[title]') !== null) return false
-  // Live regions are normally dynamic/private. A positively identified pet
-  // whisper is the sole local-only exception; ordinary status/session bubbles
-  // remain untouched.
-  if (parent.closest('[aria-live]') !== null && !(allowBrowserLocalModelText && parent.closest('[class*="bubbleWhisper" i]') !== null)) return false
+  if (parent.closest(ALWAYS_SKIP_SELECTOR) !== null) return false
+
+  // The local model is deliberately comprehensive: messages, session and
+  // workspace titles, search results, forms, live status text, and mixed
+  // formatted prose are all visible presentation data and stay in-browser.
+  if (allowBrowserLocalModelText) return true
+
+  // Network-capable and glossary modes remain conservative and accept only
+  // compile-time-known leaf UI phrases outside private/dynamic surfaces.
+  if (!isKnownStaticPhrase(text)) return false
+  if (parent.children.length > 0) return false
+  if (parent.closest(REMOTE_CONTENT_SKIP_SELECTOR) !== null) return false
+  if (parent.closest('form') !== null || parent.closest('[aria-live]') !== null) return false
   return true
 }
 
@@ -93,6 +92,7 @@ function splitWhitespace(value: string): { prefix: string; core: string; suffix:
 interface TranslationRecord {
   original: string
   translated: string
+  showingOriginal: boolean
 }
 
 export class StaticDomTranslator {
@@ -104,6 +104,7 @@ export class StaticDomTranslator {
   private observer: MutationObserver | undefined
   private flushTimer: number | undefined
   private readonly activeRequests = new Set<AbortController>()
+  private readonly controls: TranslationControls
   private generation = 0
 
   constructor(
@@ -112,9 +113,15 @@ export class StaticDomTranslator {
     initialSettings: ResolvedUITranslateSettings,
   ) {
     this.settings = initialSettings
+    this.controls = new TranslationControls(document, {
+      getState: node => this.displayState(node),
+      toggle: node => this.toggleNode(node),
+      retranslate: node => this.retranslateNode(node),
+    })
   }
 
   start(): void {
+    this.controls.start()
     this.syncObserver()
   }
 
@@ -137,6 +144,7 @@ export class StaticDomTranslator {
     this.flushTimer = undefined
     this.pendingRoots.clear()
     this.restore()
+    this.controls.dispose()
   }
 
   restore(): void {
@@ -146,6 +154,38 @@ export class StaticDomTranslator {
       this.records.delete(node)
     }
     this.translatedNodes.clear()
+    this.controls.sync(this.translatedNodes)
+  }
+
+  private displayState(node: Text): TranslationDisplayState | undefined {
+    const record = this.records.get(node)
+    if (record === undefined || !this.translatedNodes.has(node)) return undefined
+    return record.showingOriginal ? 'original' : 'translated'
+  }
+
+  private toggleNode(node: Text): void {
+    const record = this.records.get(node)
+    if (record === undefined || !node.isConnected) return
+    if (record.showingOriginal) {
+      node.data = record.translated
+      record.showingOriginal = false
+    } else {
+      node.data = record.original
+      record.showingOriginal = true
+    }
+    this.controls.sync(this.translatedNodes)
+  }
+
+  private retranslateNode(node: Text): void {
+    const record = this.records.get(node)
+    if (record === undefined || !node.isConnected) return
+    const { core } = splitWhitespace(record.original)
+    node.data = record.original
+    this.records.delete(node)
+    this.translatedNodes.delete(node)
+    for (const key of this.cache.keys()) if (key.endsWith(`\u0000${core}`)) this.cache.delete(key)
+    this.controls.sync(this.translatedNodes)
+    this.queue(node)
   }
 
   private abortActiveRequests(): void {
@@ -205,7 +245,15 @@ export class StaticDomTranslator {
     const bySource = new Map<string, Text[]>()
     for (const node of nodes) {
       const record = this.records.get(node)
-      if (record !== undefined && node.data === record.translated) continue
+      const recordIsCurrent = record !== undefined && (
+        (!record.showingOriginal && node.data === record.translated)
+        || (record.showingOriginal && node.data === record.original)
+      )
+      if (recordIsCurrent) continue
+      if (record !== undefined) {
+        this.records.delete(node)
+        this.translatedNodes.delete(node)
+      }
       const { core } = splitWhitespace(node.data)
       if (!containsChinese(core)) continue
       bySource.set(core, [...(bySource.get(core) ?? []), node])
@@ -216,7 +264,7 @@ export class StaticDomTranslator {
     const translated = new Map<string, string>()
     const missing: string[] = []
     for (const source of bySource.keys()) {
-      const cached = this.cache.get(prefix + source)
+      const cached = source.length <= MAX_CACHE_TEXT_LENGTH ? this.cache.get(prefix + source) : undefined
       if (cached === undefined) missing.push(source)
       else translated.set(source, cached)
     }
@@ -230,7 +278,7 @@ export class StaticDomTranslator {
         values.forEach((value, index) => {
           const source = missing[index]
           translated.set(source, value)
-          this.cache.set(prefix + source, value)
+          if (source.length <= MAX_CACHE_TEXT_LENGTH) this.cache.set(prefix + source, value)
         })
         while (this.cache.size > CACHE_LIMIT) this.cache.delete(this.cache.keys().next().value as string)
       } catch (error) {
@@ -244,17 +292,19 @@ export class StaticDomTranslator {
     if (generation !== this.generation || !this.settings.enabled) return
     for (const [source, sourceNodes] of bySource) {
       const value = translated.get(source)
-      if (value === undefined || value === source || containsChinese(value)) continue
+      if (value === undefined || value === source) continue
+      if (this.settings.backend !== 'browser-opus-mt' && containsChinese(value)) continue
       for (const node of sourceNodes) {
         if (!isSafeLeafTextNode(node, this.settings.backend === 'browser-opus-mt')) continue
         const parts = splitWhitespace(node.data)
         if (parts.core !== source) continue
         const original = node.data
         const next = parts.prefix + value + parts.suffix
-        this.records.set(node, { original, translated: next })
+        this.records.set(node, { original, translated: next, showingOriginal: false })
         this.translatedNodes.add(node)
         node.data = next
       }
     }
+    this.controls.sync(this.translatedNodes)
   }
 }

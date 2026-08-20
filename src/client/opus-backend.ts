@@ -1,4 +1,5 @@
 import {
+  OPUS_MAX_TEXT_LENGTH,
   OPUS_MAX_TEXTS,
   OPUS_WORKER_URL,
   type OpusTranslateRequest,
@@ -30,6 +31,47 @@ function abortError(): Error {
   return error
 }
 
+const CHINESE_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u
+
+interface OpusTextPart {
+  prefix: string
+  core: string
+  suffix: string
+  translate: boolean
+  continuation: boolean
+}
+
+interface BoundedPart {
+  value: string
+  continuation: boolean
+}
+
+function splitBounded(value: string): BoundedPart[] {
+  if (value.length <= OPUS_MAX_TEXT_LENGTH) return [{ value, continuation: false }]
+  const chunks: BoundedPart[] = []
+  let chunk = ''
+  for (const character of value) {
+    if (chunk.length > 0 && chunk.length + character.length > OPUS_MAX_TEXT_LENGTH) {
+      chunks.push({ value: chunk, continuation: chunks.length > 0 })
+      chunk = ''
+    }
+    chunk += character
+  }
+  if (chunk.length > 0) chunks.push({ value: chunk, continuation: chunks.length > 0 })
+  return chunks
+}
+
+export function splitOpusText(value: string): OpusTextPart[] {
+  const sentences = value.split(/(?<=[。！？!?；;\n])/u)
+  return sentences.flatMap(sentence => splitBounded(sentence)).filter(part => part.value.length > 0).map(part => {
+    const match = /^(\s*)(.*?)(\s*)$/su.exec(part.value)
+    const prefix = match?.[1] ?? ''
+    const core = match?.[2] ?? part.value
+    const suffix = match?.[3] ?? ''
+    return { prefix, core, suffix, translate: core.length > 0 && CHINESE_RE.test(core), continuation: part.continuation }
+  })
+}
+
 export class BrowserLocalOpusBackend implements ClientTranslationBackend {
   readonly id = 'browser-opus-mt'
   private worker: WorkerLike | undefined
@@ -45,22 +87,25 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
     if (settings.targetLanguage !== 'en') throw new Error('browser-local OPUS-MT currently supports English only')
     if (signal.aborted) throw abortError()
 
-    const translations = texts.map(text => translateKnownStaticPhraseToEnglish(text))
-    const missing = new Map<string, number[]>()
-    texts.forEach((text, index) => {
-      if (translations[index] === undefined) missing.set(text, [...(missing.get(text) ?? []), index])
-    })
-    if (missing.size === 0) return translations as string[]
+    const direct = texts.map(text => translateKnownStaticPhraseToEnglish(text))
+    const plans = texts.map((text, index) => direct[index] === undefined ? splitOpusText(text) : [])
+    const uniqueSegments = new Set<string>()
+    for (const parts of plans) for (const part of parts) if (part.translate) uniqueSegments.add(part.core)
 
-    const sources = [...missing.keys()]
+    const translatedSegments = new Map<string, string>()
+    const sources = [...uniqueSegments]
     for (let offset = 0; offset < sources.length; offset += OPUS_MAX_TEXTS) {
       const chunk = sources.slice(offset, offset + OPUS_MAX_TEXTS)
       const values = await this.request(chunk, signal)
-      values.forEach((value, index) => {
-        for (const targetIndex of missing.get(chunk[index]) ?? []) translations[targetIndex] = value
-      })
+      values.forEach((value, index) => translatedSegments.set(chunk[index], value))
     }
-    return translations.map((value, index) => value ?? texts[index])
+
+    return texts.map((text, index) => {
+      if (direct[index] !== undefined) return direct[index] as string
+      const parts = plans[index]
+      if (parts.length === 0) return text
+      return parts.map(part => part.prefix + (part.translate && part.continuation ? ' ' : '') + (part.translate ? translatedSegments.get(part.core) ?? part.core : part.core) + part.suffix).join('')
+    })
   }
 
   dispose(): void {

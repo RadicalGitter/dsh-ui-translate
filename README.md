@@ -1,31 +1,29 @@
 # dsh-ui-translate
 
-A privacy-first DeepSeek Harness Web plugin that translates safe, short Chinese UI text without enabling Chrome auto-translate and without rewriting fragile composer or user-content DOM.
+A privacy-first DeepSeek Harness Web plugin that can translate all visible Chinese UI and content—including session titles, workspace names, messages, search results, and plugin text—without enabling Chrome auto-translate.
 
-## Safety model
+## Privacy and mutation model
 
-The plugin is deliberately conservative:
-
-- disabled on first install;
-- defaults to an in-process offline glossary, so no page text leaves the browser;
-- for network-capable translation, considers only connected leaf text approved by a compile-time allowlist of known DSH Chinese UI phrases and narrowly bounded numeric pet templates;
-- for the explicitly selected browser-local model, may translate other short Chinese leaf copy only inside positively identified static surfaces (currently pet whispers/feedback or an explicit `data-dsh-translate="static"` owner marker), while still excluding user/session/workspace/search/message/composer surfaces and keeping all inference inside a dedicated Worker;
-- changes only the `Text.data` value, never element structure, attributes, listeners, or React ownership;
-- skips `textarea`, `input`, `select`, `contenteditable`, `code`, `pre`, `[data-input-backdrop]`, forms, conversation/message regions, composer/editor-related subtrees, `translate="no"`, `.notranslate`, and all live regions except positively identified local pet whispers;
-- restores translated nodes when disabled or reconfigured;
-- keeps bounded in-memory caches in the browser and Host process; page text is not persisted by the plugin.
-
-The selectors and source-phrase allowlist are intentionally biased toward false negatives. Unknown, user-authored, or unsafe text remains Chinese and is never provider input.
+- The plugin is disabled on first install and defaults to the in-process offline glossary.
+- Network-capable translation remains restricted to a compile-time allowlist of known DSH UI phrases and bounded numeric templates.
+- The explicitly selected browser-local OPUS-MT backend translates all connected visible Chinese text, including user-authored and session-derived content. Source text and translations stay inside a dedicated browser Worker and are never uploaded.
+- Editable/composer fields, `textarea`, `input`, `select`, `contenteditable`, code/preformatted content, `[data-input-backdrop]`, `translate="no"`, and `.notranslate` remain untouched to avoid corrupting authored or executable text.
+- Translation changes only `Text.data`; element structure, attributes, stable session/workspace IDs, links, listeners, and React ownership remain intact.
+- Translated text receives a visible dashed highlight. Hovering it exposes exactly one contextual action: **Show original** while translated, then **Re-translate** after the original is shown. The control does not wrap or intercept the underlying link.
+- Translated session titles are presentation aliases: clicking them still opens the canonical thread through its unchanged ID/link. Free-text alias resolution by an agent is not yet provided.
+- Disabling or reconfiguring the plugin restores original text. Translation-result caches are bounded and memory-only; downloaded model assets use the browser cache.
 
 ## Backends
 
 | Backend | Default | Network behavior |
 | --- | --- | --- |
 | Offline glossary | Yes | No network. Translates approved Chinese labels and bounded pet count/point templates to English; unknown labels stay unchanged. |
-| Browser-local OPUS-MT | No | Chinese-to-English only. On first use, downloads about 110 MB of pinned quantized model files from Hugging Face, caches them in the browser, and performs inference inside a dedicated local Worker. UI text is not uploaded. |
+| Browser-local OPUS-MT | No | Chinese-to-English only. Translates all visible Chinese UI and content. On first use, downloads about 110 MB of pinned quantized model files from Hugging Face, caches them in the browser, and performs inference inside a dedicated local Worker. Page text is not uploaded. |
 | OpenAI-compatible | No | Sends only allowlisted UI phrases after the user explicitly selects this backend and enables translation. Calls run through a token-authenticated, same-origin, rate-limited, loopback-only Host route. |
 
-The browser-local backend uses `Xenova/opus-mt-zh-en` pinned to revision `39d480d52a9ea3065a1f117adfe4dbc55de10e6f`. Selecting it is explicit consent to download public model artifacts from Hugging Face. The model files are the only remote payload in this mode: source UI text and translations stay inside the browser Worker. Cancelling, disabling, reconfiguring, or unloading the plugin terminates active inference.
+The browser-local backend uses `Xenova/opus-mt-zh-en` pinned to revision `39d480d52a9ea3065a1f117adfe4dbc55de10e6f`. Selecting it is explicit consent to download public model artifacts from Hugging Face. The model files are the only remote payload in this mode: source UI text and translations stay inside the browser Worker. Long messages are segmented into bounded sentences/chunks and reconstructed locally. Cancelling, disabling, reconfiguring, or unloading the plugin terminates active inference.
+
+Translated text is visually marked through the browser Custom Highlight API, with an outlined-parent fallback where that API is unavailable. The floating control box lives outside React-owned content and shows one action at a time: reveal the original, then invalidate the local result cache and re-translate it.
 
 The OpenAI-compatible provider defaults to `http://127.0.0.1:11434/v1` and model `qwen2.5:7b`. Loopback, RFC1918, link-local, `.local`, and `host.docker.internal` endpoints are accepted. Public hosts require the explicit **Allow a public endpoint** setting and HTTPS.
 
@@ -63,6 +61,7 @@ The settings page exposes:
 - target language (default: English);
 - backend (default: offline glossary), including the opt-in browser-local OPUS-MT engine;
 - local-model download/initialization status when OPUS-MT is selected;
+- automatic highlights and per-text original/re-translate controls for translated content;
 - OpenAI-compatible endpoint, model, and public-endpoint opt-in when that backend is selected.
 
 The same values can be supplied in a later Cordis patch:
