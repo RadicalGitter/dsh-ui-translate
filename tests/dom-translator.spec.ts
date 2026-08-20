@@ -295,6 +295,10 @@ describe('StaticDomTranslator', () => {
     expect(style.textContent).not.toContain('underline 2px dashed')
     expect(label.classList.contains('dsh-ui-translate-fallback-highlight')).toBe(false)
     expect(dom.window.document.querySelectorAll('[data-dsh-ui-translate-fallback-marker="true"]')).not.toHaveLength(0)
+    const settledMarker = dom.window.document.querySelector('[data-dsh-ui-translate-fallback-marker="true"]')
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(dom.window.document.querySelector('[data-dsh-ui-translate-fallback-marker="true"]')).toBe(settledMarker)
 
     translator.update(resolveSettings({ enabled: true, backend: 'browser-opus-mt', markerStyle: 'underline' }))
     expect(style.textContent).toContain('underline 2px dashed #7c3aed')
