@@ -61,11 +61,14 @@ async function getTranslator(id: number, pairId: LocalPairId, pair: VettedLocalP
 function validateRequest(value: unknown): OpusTranslateRequest {
   if (typeof value !== 'object' || value === null) throw new Error('invalid local translation request')
   const request = value as Partial<OpusTranslateRequest>
-  if (request.type !== 'translate' || !Number.isSafeInteger(request.id) || typeof request.pairId !== 'string' || !Array.isArray(request.texts)) {
+  if (request.type !== 'translate' || !Number.isSafeInteger(request.id) || !Array.isArray(request.texts)) {
     throw new Error('invalid local translation request')
   }
-  if (!(request.pairId in VETTED_LOCAL_PAIRS)) throw new Error('local translation pair is not vetted')
-  const pairId = request.pairId as LocalPairId
+  // Revision 3 clients predate pair-aware requests. Default them to the only
+  // pair that existed then so a Host restart cannot break an open old tab.
+  const requestedPairId = request.pairId ?? 'zh-en'
+  if (typeof requestedPairId !== 'string' || !(requestedPairId in VETTED_LOCAL_PAIRS)) throw new Error('local translation pair is not vetted')
+  const pairId = requestedPairId as LocalPairId
   const pair = VETTED_LOCAL_PAIRS[pairId]
   if (request.texts.length === 0 || request.texts.length > OPUS_MAX_TEXTS) throw new Error('local translation batch is out of bounds')
   if (request.texts.some(text => typeof text !== 'string' || text.length === 0 || text.length > OPUS_MAX_TEXT_LENGTH || !containsSourceLanguage(text, pair))) {

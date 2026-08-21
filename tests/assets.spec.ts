@@ -5,7 +5,7 @@ import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createOpusAssetHandler } from '../src/assets.ts'
-import { OPUS_ASSET_PREFIX } from '../src/core/opus.ts'
+import { OPUS_ASSET_PREFIX, OPUS_WORKER_REVISION, OPUS_WORKER_URL } from '../src/core/opus.ts'
 
 const servers: Server[] = []
 const directories: string[] = []
@@ -32,6 +32,11 @@ async function serveAssets(): Promise<string> {
 }
 
 describe('local-model asset route', () => {
+  it('uses a fresh immutable URL for the pair-aware Worker protocol', () => {
+    expect(OPUS_WORKER_REVISION).toBe('4')
+    expect(OPUS_WORKER_URL).toBe(`${OPUS_ASSET_PREFIX}/opus-worker.js?revision=4`)
+  })
+
   it('serves only fixed versioned Worker and WASM assets', async () => {
     const url = await serveAssets()
     const worker = await fetch(`${url}${OPUS_ASSET_PREFIX}/opus-worker.js`)
