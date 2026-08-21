@@ -1,6 +1,7 @@
 import type { ClientBackendRegistry } from './backends.ts'
 import { isKnownStaticPhrase } from '../core/static-phrases.ts'
-import { resolveVettedLocalPair } from '../core/language-pairs.ts'
+import { VETTED_LOCAL_PAIRS, resolveVettedLocalPair, type VettedLocalPair } from '../core/language-pairs.ts'
+import { containsSourceLanguage } from '../core/text-segmentation.ts'
 import type { ResolvedUITranslateSettings } from './settings-model.ts'
 import { TranslationControls, type TranslationDisplayState } from './translation-controls.ts'
 
@@ -13,17 +14,17 @@ const FLUSH_DELAY_MS = 40
 const RETRY_DELAY_MS = 750
 const NEGATIVE_CACHE_MS = 30_000
 
-// These surfaces are never mutated. They are either actively editable or
-// executable/verbatim content where translation would corrupt user input.
+// These surfaces are never mutated because they are editable, explicitly
+// excluded, or owned by the translation controls themselves. Verbatim content
+// is handled separately so plugins can opt an exact read-only prose node in.
+export const TRANSLATABLE_PROSE_SELECTOR = '[data-dsh-translate="prose"]'
+export const VERBATIM_SKIP_SELECTOR = 'code,pre,kbd,samp'
+
 export const ALWAYS_SKIP_SELECTOR = [
   'textarea',
   'input',
   'select',
   'option',
-  'code',
-  'pre',
-  'kbd',
-  'samp',
   'script',
   'style',
   'noscript',
@@ -67,13 +68,20 @@ export function containsChinese(text: string): boolean {
   return CHINESE_RE.test(text)
 }
 
-export function isSafeLeafTextNode(node: Text, allowBrowserLocalModelText = false): boolean {
+export function isSafeLeafTextNode(
+  node: Text,
+  allowBrowserLocalModelText = false,
+  localPair: VettedLocalPair = VETTED_LOCAL_PAIRS['zh-en'],
+): boolean {
   const parent = node.parentElement
   if (parent === null || !node.isConnected) return false
   const text = node.data.trim()
-  if (text.length === 0 || (!allowBrowserLocalModelText && text.length > MAX_STATIC_TEXT_LENGTH) || !containsChinese(text)) return false
+  const containsSource = allowBrowserLocalModelText ? containsSourceLanguage(text, localPair) : containsChinese(text)
+  if (text.length === 0 || (!allowBrowserLocalModelText && text.length > MAX_STATIC_TEXT_LENGTH) || !containsSource) return false
   if (parent.isContentEditable || parent.closest('[hidden],[aria-hidden="true"],[inert]') !== null) return false
   if (parent.closest(ALWAYS_SKIP_SELECTOR) !== null) return false
+  const verbatim = parent.closest(VERBATIM_SKIP_SELECTOR)
+  if (verbatim !== null && (!allowBrowserLocalModelText || !verbatim.matches(TRANSLATABLE_PROSE_SELECTOR))) return false
 
   // The local model is deliberately comprehensive: messages, session and
   // workspace titles, search results, forms, live status text, and mixed
@@ -352,7 +360,11 @@ export class StaticDomTranslator {
     const view = this.document.defaultView
     if (view === null) return []
     const allowBrowserLocalModelText = this.settings.backend === 'browser-opus-mt'
-    const accepts = (node: Text): boolean => isSafeLeafTextNode(node, allowBrowserLocalModelText)
+    const localPair = allowBrowserLocalModelText
+      ? resolveVettedLocalPair(this.settings.sourceLanguage, this.settings.targetLanguage)
+      : undefined
+    if (allowBrowserLocalModelText && localPair === undefined) return []
+    const accepts = (node: Text): boolean => isSafeLeafTextNode(node, allowBrowserLocalModelText, localPair)
       && (!allowBrowserLocalModelText || this.isRenderedInViewport(node))
     if (root.nodeType === view.Node.TEXT_NODE) return accepts(root as Text) ? [root as Text] : []
     const walker = this.document.createTreeWalker(root, view.NodeFilter.SHOW_TEXT)
@@ -394,6 +406,9 @@ export class StaticDomTranslator {
     const nodes = [...new Set(roots.flatMap(root => this.collect(root)))]
     if (nodes.length === 0) return
 
+    const activeLocalPair = this.settings.backend === 'browser-opus-mt'
+      ? resolveVettedLocalPair(this.settings.sourceLanguage, this.settings.targetLanguage)
+      : undefined
     const bySource = new Map<string, Text[]>()
     for (const node of nodes) {
       const record = this.records.get(node)
@@ -407,7 +422,8 @@ export class StaticDomTranslator {
         this.translatedNodes.delete(node)
       }
       const { core } = splitWhitespace(node.data)
-      if (!containsChinese(core)) continue
+      const containsSource = activeLocalPair === undefined ? containsChinese(core) : containsSourceLanguage(core, activeLocalPair)
+      if (!containsSource) continue
       bySource.set(core, [...(bySource.get(core) ?? []), node])
     }
     if (bySource.size === 0) return
@@ -473,7 +489,7 @@ export class StaticDomTranslator {
       if (value === undefined || value === source) continue
       if (this.settings.backend !== 'browser-opus-mt' && containsChinese(value)) continue
       for (const node of sourceNodes) {
-        if (!isSafeLeafTextNode(node, this.settings.backend === 'browser-opus-mt')) continue
+        if (!isSafeLeafTextNode(node, this.settings.backend === 'browser-opus-mt', activeLocalPair)) continue
         const parts = splitWhitespace(node.data)
         if (parts.core !== source) continue
         const original = node.data

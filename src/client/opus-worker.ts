@@ -7,6 +7,7 @@ import {
   type OpusWorkerMessage,
 } from '../core/opus.ts'
 import { VETTED_LOCAL_PAIRS, type LocalPairId, type VettedLocalPair } from '../core/language-pairs.ts'
+import { containsSourceLanguage } from '../core/text-segmentation.ts'
 
 interface WorkerScope {
   onmessage: ((event: MessageEvent<unknown>) => void) | null
@@ -19,7 +20,6 @@ interface ProgressInfo {
   progress?: unknown
 }
 
-const CHINESE_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u
 const scope = globalThis as unknown as WorkerScope
 const wasm = env.backends.onnx.wasm
 if (wasm === undefined) throw new Error('ONNX WebAssembly backend is unavailable')
@@ -65,11 +65,13 @@ function validateRequest(value: unknown): OpusTranslateRequest {
     throw new Error('invalid local translation request')
   }
   if (!(request.pairId in VETTED_LOCAL_PAIRS)) throw new Error('local translation pair is not vetted')
+  const pairId = request.pairId as LocalPairId
+  const pair = VETTED_LOCAL_PAIRS[pairId]
   if (request.texts.length === 0 || request.texts.length > OPUS_MAX_TEXTS) throw new Error('local translation batch is out of bounds')
-  if (request.texts.some(text => typeof text !== 'string' || text.length === 0 || text.length > OPUS_MAX_TEXT_LENGTH || !CHINESE_RE.test(text))) {
+  if (request.texts.some(text => typeof text !== 'string' || text.length === 0 || text.length > OPUS_MAX_TEXT_LENGTH || !containsSourceLanguage(text, pair))) {
     throw new Error('local translation text is out of bounds')
   }
-  return request as OpusTranslateRequest
+  return { type: 'translate', id: request.id as number, pairId, texts: request.texts as string[] }
 }
 
 function extractTranslations(value: unknown, expected: number): string[] {

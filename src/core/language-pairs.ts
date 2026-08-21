@@ -9,7 +9,7 @@ export type TargetLanguage = typeof TARGET_LANGUAGES[number]
 export const DEFAULT_SOURCE_LANGUAGE: SourceLanguage = 'zh'
 export const DEFAULT_TARGET_LANGUAGE: TargetLanguage = 'en'
 
-export type SourceMatcherId = 'han'
+export type SourceMatcherId = 'han' | 'latin'
 export type TargetJoinStrategy = 'spaced' | 'cjk'
 
 export interface VettedLocalPair {

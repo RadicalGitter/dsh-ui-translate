@@ -7,7 +7,7 @@ A privacy-first DeepSeek Harness Web plugin that can translate all visible Chine
 - The plugin is disabled on first install and defaults to the in-process offline glossary.
 - Network-capable translation remains restricted to a compile-time allowlist of known DSH UI phrases and bounded numeric templates.
 - The explicitly selected browser-local OPUS-MT backend translates all connected visible Chinese text, including user-authored and session-derived content. Source text and translations stay inside a dedicated browser Worker and are never uploaded.
-- Editable/composer fields, `textarea`, `input`, `select`, `contenteditable`, code/preformatted content, `[data-input-backdrop]`, `translate="no"`, and `.notranslate` remain untouched to avoid corrupting authored or executable text.
+- Editable/composer fields, `textarea`, `input`, `select`, `contenteditable`, code/preformatted content, `[data-input-backdrop]`, `translate="no"`, and `.notranslate` remain untouched to avoid corrupting authored or executable text. A plugin may explicitly mark a read-only `<pre>` as prose with `data-dsh-translate="prose"`; only the browser-local backend may translate that opt-in surface.
 - Translation changes only `Text.data`; element structure, attributes, stable session/workspace IDs, links, listeners, and React ownership remain intact.
 - Translated text receives a configurable marker: purple overlay (default), dashed underline, both, or none. Hovering directly over translated characters for about 0.65 seconds exposes exactly one contextual action: **Show original** while translated, then **Re-translate** after the original is shown. The control does not wrap or intercept the underlying link.
 - Translated session titles are presentation aliases: clicking them still opens the canonical thread through its unchanged ID/link. Free-text alias resolution by an agent is not yet provided.
@@ -30,7 +30,17 @@ The OpenAI-compatible provider defaults to `http://127.0.0.1:11434/v1` and model
 
 An optional bearer token is read by the Host from `DSH_UI_TRANSLATE_API_KEY` (or the composition-only `apiKeyEnv` setting). It is never stored in browser state or sent to the settings UI. Redirects are rejected so credentials are not forwarded to another origin.
 
-Provider code is isolated behind `TranslationProvider` / `TranslationProviderRegistry` on the Host and `ClientTranslationBackend` / `ClientBackendRegistry` in the browser, so more providers can be added without changing the DOM safety engine.
+Provider code is isolated behind `TranslationProvider` / `TranslationProviderRegistry` on the Host and `ClientTranslationBackend` / `ClientBackendRegistry` in the browser. Browser-local models resolve through a compile-time vetted language-pair catalog that pins the model, revision, license metadata, source matcher, and target joining strategy; configuration cannot supply arbitrary model asset URLs.
+
+### Integrating readable plugin content
+
+Dynamically mounted plugin text needs no API call: the document observer discovers ordinary visible text automatically. Verbatim elements remain protected because a generic translator cannot know whether `<pre>` contains prose, JSON, tool arguments, or executable code. A plugin that renders trustworthy read-only prose—such as an injected `AGENTS.md`, a context summary, or a tool description—can opt in on that exact element:
+
+```html
+<pre data-dsh-translate="prose">可供用户阅读的注入上下文</pre>
+```
+
+Do not put the attribute on JSON schemas, tool arguments, source code, terminal output, or an ancestor that also contains those surfaces. The attribute is intentionally inert when the offline glossary or a network-capable backend is selected, so arbitrary injected context cannot cross the Host privacy boundary.
 
 ## Install
 
@@ -72,6 +82,7 @@ The same values can be supplied in a later Cordis patch:
 - id: ui-translate
   config:
     enabled: true
+    sourceLanguage: zh
     targetLanguage: en
     backend: openai-compatible
     markerStyle: overlay

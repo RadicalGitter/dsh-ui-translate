@@ -149,6 +149,13 @@ describe('safe leaf selection', () => {
     expect(isSafeLeafTextNode(walker.nextNode() as Text)).toBe(false)
   })
 
+  it('allows explicitly annotated read-only prose inside pre only for the local model', () => {
+    const dom = createDom('<pre data-dsh-translate="prose">设置</pre>')
+    const node = dom.window.document.querySelector('pre')!.firstChild as Text
+    expect(isSafeLeafTextNode(node)).toBe(false)
+    expect(isSafeLeafTextNode(node, true)).toBe(true)
+  })
+
   it.each([
     '<textarea>设置</textarea>',
     '<div contenteditable="true">设置</div>',
@@ -178,6 +185,28 @@ describe('StaticDomTranslator', () => {
     expect(dom.window.document.querySelector('#skip')!.textContent).toBe('设置')
     translator.update(resolveSettings({ enabled: false }))
     expect(dom.window.document.querySelector('#label')!.textContent).toBe('  设置  ')
+    translator.dispose()
+  })
+
+  it('translates opted-in injected prose while leaving adjacent verbatim previews untouched', async () => {
+    vi.useFakeTimers()
+    const dom = createDom(`
+      <div class="lc-br-content">
+        <pre id="agents" class="lc-br-pre" data-dsh-translate="prose">中文工作区</pre>
+        <pre id="schema" class="lc-br-pre lc-br-dim">设置</pre>
+      </div>
+    `)
+    const backend = new MockBackend('browser-opus-mt')
+    const translator = new StaticDomTranslator(
+      dom.window.document,
+      new ClientBackendRegistry().register(backend),
+      resolveSettings({ enabled: true, backend: 'browser-opus-mt' }),
+    )
+    translator.start()
+    await vi.runAllTimersAsync()
+
+    expect(dom.window.document.querySelector('#agents')!.textContent).toBe('Translated workspace')
+    expect(dom.window.document.querySelector('#schema')!.textContent).toBe('设置')
     translator.dispose()
   })
 

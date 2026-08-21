@@ -6,7 +6,8 @@ import {
   type OpusWorkerMessage,
 } from '../core/opus.ts'
 import { translateKnownStaticPhraseToEnglish } from '../core/static-phrases.ts'
-import { requireVettedLocalPair, resolveVettedLocalPair, type LocalPairId } from '../core/language-pairs.ts'
+import { VETTED_LOCAL_PAIRS, requireVettedLocalPair, resolveVettedLocalPair, type LocalPairId } from '../core/language-pairs.ts'
+import { assembleTranslatedText, splitTextForPair, type TranslationTextPart } from '../core/text-segmentation.ts'
 import type { ClientTranslationBackend } from './backends.ts'
 import { opusModelStatus } from './opus-status.ts'
 import type { ResolvedUITranslateSettings } from './settings-model.ts'
@@ -34,45 +35,10 @@ function abortError(): Error {
   return error
 }
 
-const CHINESE_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u
-
-interface OpusTextPart {
-  prefix: string
-  core: string
-  suffix: string
-  translate: boolean
-  continuation: boolean
-}
-
-interface BoundedPart {
-  value: string
-  continuation: boolean
-}
-
-function splitBounded(value: string): BoundedPart[] {
-  if (value.length <= OPUS_MAX_TEXT_LENGTH) return [{ value, continuation: false }]
-  const chunks: BoundedPart[] = []
-  let chunk = ''
-  for (const character of value) {
-    if (chunk.length > 0 && chunk.length + character.length > OPUS_MAX_TEXT_LENGTH) {
-      chunks.push({ value: chunk, continuation: chunks.length > 0 })
-      chunk = ''
-    }
-    chunk += character
-  }
-  if (chunk.length > 0) chunks.push({ value: chunk, continuation: chunks.length > 0 })
-  return chunks
-}
+export type OpusTextPart = TranslationTextPart
 
 export function splitOpusText(value: string): OpusTextPart[] {
-  const sentences = value.split(/(?<=[。！？!?；;\n])/u)
-  return sentences.flatMap(sentence => splitBounded(sentence)).filter(part => part.value.length > 0).map(part => {
-    const match = /^(\s*)(.*?)(\s*)$/su.exec(part.value)
-    const prefix = match?.[1] ?? ''
-    const core = match?.[2] ?? part.value
-    const suffix = match?.[3] ?? ''
-    return { prefix, core, suffix, translate: core.length > 0 && CHINESE_RE.test(core), continuation: part.continuation }
-  })
+  return splitTextForPair(value, VETTED_LOCAL_PAIRS['zh-en'], OPUS_MAX_TEXT_LENGTH)
 }
 
 export function sanitizeOpusTranslation(value: string, source: string): string {
@@ -99,7 +65,7 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
     if (signal.aborted) throw abortError()
 
     const direct = texts.map(text => pair.id === 'zh-en' ? translateKnownStaticPhraseToEnglish(text) : undefined)
-    const plans = texts.map((text, index) => direct[index] === undefined ? splitOpusText(text) : [])
+    const plans = texts.map((text, index) => direct[index] === undefined ? splitTextForPair(text, pair, OPUS_MAX_TEXT_LENGTH) : [])
     const uniqueSegments = new Set<string>()
     for (const parts of plans) for (const part of parts) if (part.translate) uniqueSegments.add(part.core)
 
@@ -115,11 +81,7 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
       if (direct[index] !== undefined) return direct[index] as string
       const parts = plans[index]
       if (parts.length === 0) return text
-      return parts.map(part => {
-        const translated = part.translate ? translatedSegments.get(part.core) ?? part.core : part.core
-        const separator = part.translate && part.continuation && translated !== part.core ? ' ' : ''
-        return part.prefix + separator + translated + part.suffix
-      }).join('')
+      return assembleTranslatedText(parts, translatedSegments, pair)
     })
   }
 
