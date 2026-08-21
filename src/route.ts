@@ -120,7 +120,7 @@ export function createTranslateHandler(
       if (!config.enabled) throw new Error('UI translation is disabled')
       if (config.backend !== 'openai-compatible') throw new Error('the active backend does not use the Host translation route')
       const { texts, targetLanguage } = validateRequest(await readJson(req), config)
-      const prefix = `${config.backend}\u0000${config.endpoint}\u0000${config.model}\u0000${targetLanguage}\u0000`
+      const prefix = `${config.backend}\u0000${config.sourceLanguage}\u0000${config.endpoint}\u0000${config.model}\u0000${targetLanguage}\u0000`
       const results = new Array<string>(texts.length)
       const missing = new Map<string, number[]>()
       texts.forEach((text, index) => {

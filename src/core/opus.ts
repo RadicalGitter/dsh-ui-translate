@@ -1,5 +1,7 @@
-export const OPUS_MODEL_ID = 'Xenova/opus-mt-zh-en'
-export const OPUS_MODEL_REVISION = '39d480d52a9ea3065a1f117adfe4dbc55de10e6f'
+import { VETTED_LOCAL_PAIRS } from './language-pairs.ts'
+
+export const OPUS_MODEL_ID = VETTED_LOCAL_PAIRS['zh-en'].modelId
+export const OPUS_MODEL_REVISION = VETTED_LOCAL_PAIRS['zh-en'].revision
 export const OPUS_RUNTIME_VERSION = '0.3.0'
 export const OPUS_ASSET_PREFIX = `/ui-translate/assets/v${OPUS_RUNTIME_VERSION}`
 export const OPUS_WORKER_REVISION = '3'

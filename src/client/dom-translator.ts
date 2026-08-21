@@ -1,5 +1,6 @@
 import type { ClientBackendRegistry } from './backends.ts'
 import { isKnownStaticPhrase } from '../core/static-phrases.ts'
+import { resolveVettedLocalPair } from '../core/language-pairs.ts'
 import type { ResolvedUITranslateSettings } from './settings-model.ts'
 import { TranslationControls, type TranslationDisplayState } from './translation-controls.ts'
 
@@ -409,7 +410,10 @@ export class StaticDomTranslator {
     }
     if (bySource.size === 0) return
 
-    const prefix = `${this.settings.backend}\u0000${this.settings.targetLanguage}\u0000${this.settings.endpoint}\u0000${this.settings.model}\u0000`
+    const localPair = this.settings.backend === 'browser-opus-mt'
+      ? resolveVettedLocalPair(this.settings.sourceLanguage, this.settings.targetLanguage)
+      : undefined
+    const prefix = `${this.settings.backend}\u0000${this.settings.sourceLanguage}\u0000${this.settings.targetLanguage}\u0000${localPair?.revision ?? ''}\u0000${this.settings.endpoint}\u0000${this.settings.model}\u0000`
     const translated = new Map<string, string>()
     const missing: string[] = []
     for (const source of bySource.keys()) {
