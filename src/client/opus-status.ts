@@ -1,7 +1,10 @@
+import type { LocalPairId } from '../core/language-pairs.ts'
+
 export type OpusModelPhase = 'idle' | 'loading' | 'ready' | 'error'
 
 export interface OpusModelSnapshot {
   phase: OpusModelPhase
+  pairId?: LocalPairId
   progress?: number
   detail?: string
 }

@@ -1,9 +1,10 @@
 import { translateKnownStaticPhraseToEnglish } from '../core/static-phrases.ts'
 import { BrowserLocalOpusBackend } from './opus-backend.ts'
-import type { ResolvedUITranslateSettings } from './settings-model.ts'
+import type { BackendId, ResolvedUITranslateSettings } from './settings-model.ts'
 
 export interface ClientTranslationBackend {
-  readonly id: string
+  readonly id: BackendId
+  configure?(settings: ResolvedUITranslateSettings): void
   translate(texts: readonly string[], settings: ResolvedUITranslateSettings, signal: AbortSignal): Promise<readonly string[]>
   dispose?(): void
 }
@@ -52,7 +53,7 @@ export class HostOpenAICompatibleBackend implements ClientTranslationBackend {
 }
 
 export class ClientBackendRegistry {
-  private readonly backends = new Map<string, ClientTranslationBackend>()
+  private readonly backends = new Map<BackendId, ClientTranslationBackend>()
 
   register(backend: ClientTranslationBackend): this {
     if (this.backends.has(backend.id)) throw new Error(`client translation backend already registered: ${backend.id}`)
@@ -60,10 +61,14 @@ export class ClientBackendRegistry {
     return this
   }
 
-  require(id: string): ClientTranslationBackend {
+  require(id: BackendId): ClientTranslationBackend {
     const backend = this.backends.get(id)
     if (backend === undefined) throw new Error(`translation backend is not available: ${id}`)
     return backend
+  }
+
+  configure(settings: ResolvedUITranslateSettings): void {
+    for (const backend of this.backends.values()) backend.configure?.(settings)
   }
 
   dispose(): void {

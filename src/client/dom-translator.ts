@@ -131,6 +131,7 @@ export class StaticDomTranslator {
   }
 
   start(): void {
+    this.backends.configure(this.settings)
     this.controls.start()
     this.document.addEventListener('scroll', this.onViewportChanged, true)
     this.document.addEventListener('pointerup', this.onViewportChanged, true)
@@ -156,6 +157,7 @@ export class StaticDomTranslator {
     this.pendingRoots.clear()
     this.restore()
     this.settings = settings
+    this.backends.configure(settings)
     this.controls.setMarkerStyle(settings.markerStyle)
     this.syncObserver()
   }

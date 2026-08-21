@@ -39,10 +39,10 @@ describe('BrowserLocalOpusBackend', () => {
     const backend = new BrowserLocalOpusBackend(() => worker)
     const promise = backend.translate(['嗯……让我捋捋'], settings, new AbortController().signal)
     expect(worker.messages).toHaveLength(1)
-    expect(worker.messages[0].texts).toEqual(['嗯……让我捋捋'])
-    worker.respond({ type: 'progress', id: worker.messages[0].id, status: 'download', progress: 25 })
-    expect(opusModelStatus.getSnapshot()).toMatchObject({ phase: 'loading', progress: 25 })
-    worker.respond({ type: 'result', id: worker.messages[0].id, translations: ['Hmm... let me think.'] })
+    expect(worker.messages[0]).toMatchObject({ pairId: 'zh-en', texts: ['嗯……让我捋捋'] })
+    worker.respond({ type: 'progress', id: worker.messages[0].id, pairId: worker.messages[0].pairId, status: 'download', progress: 25 })
+    expect(opusModelStatus.getSnapshot()).toMatchObject({ phase: 'loading', pairId: 'zh-en', progress: 25 })
+    worker.respond({ type: 'result', id: worker.messages[0].id, pairId: worker.messages[0].pairId, translations: ['Hmm... let me think.'] })
     await expect(promise).resolves.toEqual(['Hmm... let me think.'])
     expect(opusModelStatus.getSnapshot().phase).toBe('ready')
     backend.dispose()
@@ -59,7 +59,7 @@ describe('BrowserLocalOpusBackend', () => {
     const request = worker.messages[0]
     expect(request.texts.length).toBeGreaterThan(1)
     expect(request.texts.every(text => text.length <= 320)).toBe(true)
-    worker.respond({ type: 'result', id: request.id, translations: request.texts.map((_text, index) => `Translated ${index}.`) })
+    worker.respond({ type: 'result', id: request.id, pairId: request.pairId, translations: request.texts.map((_text, index) => `Translated ${index}.`) })
     const [translated] = await promise
     expect(translated).toContain('English only.\n')
     expect(translated).not.toContain('长消息')
@@ -72,7 +72,7 @@ describe('BrowserLocalOpusBackend', () => {
     const source = '长消息'.repeat(140)
     const promise = backend.translate([source], settings, new AbortController().signal)
     const request = worker.messages[0]
-    worker.respond({ type: 'result', id: request.id, translations: [...request.texts] })
+    worker.respond({ type: 'result', id: request.id, pairId: request.pairId, translations: [...request.texts] })
     await expect(promise).resolves.toEqual([source])
     backend.dispose()
   })
@@ -82,7 +82,7 @@ describe('BrowserLocalOpusBackend', () => {
     const backend = new BrowserLocalOpusBackend(() => worker)
     const source = '梁神模式'
     const promise = backend.translate([source], settings, new AbortController().signal)
-    worker.respond({ type: 'result', id: worker.messages[0].id, translations: ['   '] })
+    worker.respond({ type: 'result', id: worker.messages[0].id, pairId: worker.messages[0].pairId, translations: ['   '] })
     await expect(promise).resolves.toEqual([source])
     expect(sanitizeOpusTranslation(`Liang God mode${'.'.repeat(80)}`, source)).toBe('Liang God mode...')
     expect(sanitizeOpusTranslation('.'.repeat(80), source)).toBe(source)
@@ -101,6 +101,21 @@ describe('BrowserLocalOpusBackend', () => {
     backend.dispose()
   })
 
+  it('terminates an idle pair worker when local translation is deselected', async () => {
+    const worker = new FakeWorker()
+    const backend = new BrowserLocalOpusBackend(() => worker)
+    const promise = backend.translate(['动态内容'], settings, new AbortController().signal)
+    const request = worker.messages[0]
+    worker.respond({ type: 'result', id: request.id, pairId: request.pairId, translations: ['Dynamic content'] })
+    await promise
+    expect(worker.terminated).toBe(false)
+
+    backend.configure(resolveSettings({ enabled: true, backend: 'offline-glossary' }))
+    expect(worker.terminated).toBe(true)
+    expect(opusModelStatus.getSnapshot()).toEqual({ phase: 'idle' })
+    backend.dispose()
+  })
+
   it('rejects unsupported target languages before starting a worker', async () => {
     let created = 0
     const backend = new BrowserLocalOpusBackend(() => { created += 1; return new FakeWorker() })
@@ -108,7 +123,7 @@ describe('BrowserLocalOpusBackend', () => {
       ['设置'],
       resolveSettings({ enabled: true, backend: 'browser-opus-mt', targetLanguage: 'sv' }),
       new AbortController().signal,
-    )).rejects.toThrow(/supports English only/)
+    )).rejects.toThrow(/pair is not available/)
     expect(created).toBe(0)
     backend.dispose()
   })

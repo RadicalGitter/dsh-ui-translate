@@ -6,6 +6,7 @@ import {
   type OpusWorkerMessage,
 } from '../core/opus.ts'
 import { translateKnownStaticPhraseToEnglish } from '../core/static-phrases.ts'
+import { requireVettedLocalPair, resolveVettedLocalPair, type LocalPairId } from '../core/language-pairs.ts'
 import type { ClientTranslationBackend } from './backends.ts'
 import { opusModelStatus } from './opus-status.ts'
 import type { ResolvedUITranslateSettings } from './settings-model.ts'
@@ -20,6 +21,7 @@ export interface WorkerLike {
 export type OpusWorkerFactory = () => WorkerLike
 
 interface PendingRequest {
+  pairId: LocalPairId
   expected: number
   sources: string[]
   resolve(value: string[]): void
@@ -83,6 +85,7 @@ export function sanitizeOpusTranslation(value: string, source: string): string {
 export class BrowserLocalOpusBackend implements ClientTranslationBackend {
   readonly id = 'browser-opus-mt'
   private worker: WorkerLike | undefined
+  private workerPairId: LocalPairId | undefined
   private nextId = 1
   private readonly pending = new Map<number, PendingRequest>()
 
@@ -92,10 +95,10 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
   }) as WorkerLike) {}
 
   async translate(texts: readonly string[], settings: ResolvedUITranslateSettings, signal: AbortSignal): Promise<readonly string[]> {
-    if (settings.targetLanguage !== 'en') throw new Error('browser-local OPUS-MT currently supports English only')
+    const pair = requireVettedLocalPair(settings.sourceLanguage, settings.targetLanguage)
     if (signal.aborted) throw abortError()
 
-    const direct = texts.map(text => translateKnownStaticPhraseToEnglish(text))
+    const direct = texts.map(text => pair.id === 'zh-en' ? translateKnownStaticPhraseToEnglish(text) : undefined)
     const plans = texts.map((text, index) => direct[index] === undefined ? splitOpusText(text) : [])
     const uniqueSegments = new Set<string>()
     for (const parts of plans) for (const part of parts) if (part.translate) uniqueSegments.add(part.core)
@@ -104,7 +107,7 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
     const sources = [...uniqueSegments]
     for (let offset = 0; offset < sources.length; offset += OPUS_MAX_TEXTS) {
       const chunk = sources.slice(offset, offset + OPUS_MAX_TEXTS)
-      const values = await this.request(chunk, signal)
+      const values = await this.request(chunk, pair.id as LocalPairId, signal)
       values.forEach((value, index) => translatedSegments.set(chunk[index], value))
     }
 
@@ -120,27 +123,38 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
     })
   }
 
+  configure(settings: ResolvedUITranslateSettings): void {
+    const pair = settings.backend === this.id
+      ? resolveVettedLocalPair(settings.sourceLanguage, settings.targetLanguage)
+      : undefined
+    const nextPairId = pair?.id as LocalPairId | undefined
+    if (this.worker !== undefined && this.workerPairId !== nextPairId) this.failWorker(abortError(), false)
+  }
+
   dispose(): void {
     this.failWorker(abortError(), false)
     opusModelStatus.set({ phase: 'idle' })
   }
 
-  private ensureWorker(): WorkerLike {
-    if (this.worker !== undefined) return this.worker
+  private ensureWorker(pairId: LocalPairId): WorkerLike {
+    if (this.worker !== undefined && this.workerPairId === pairId) return this.worker
+    if (this.worker !== undefined) this.failWorker(abortError(), false)
     const worker = this.createWorker()
     worker.onmessage = event => this.handleMessage(event.data)
     worker.onerror = () => this.failWorker(new Error('local model worker failed'))
     this.worker = worker
+    this.workerPairId = pairId
     return worker
   }
 
-  private request(texts: string[], signal: AbortSignal): Promise<string[]> {
+  private request(texts: string[], pairId: LocalPairId, signal: AbortSignal): Promise<string[]> {
     const id = this.nextId++
-    opusModelStatus.set({ phase: 'loading', progress: 0, detail: 'Preparing the local translation model' })
+    opusModelStatus.set({ phase: 'loading', pairId, progress: 0, detail: 'Preparing the local translation model' })
     return new Promise<string[]>((resolve, reject) => {
       const onAbort = (): void => this.failWorker(abortError(), false)
       signal.addEventListener('abort', onAbort, { once: true })
       this.pending.set(id, {
+        pairId,
         expected: texts.length,
         sources: [...texts],
         resolve: (value) => {
@@ -153,7 +167,7 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
         },
       })
       try {
-        this.ensureWorker().postMessage({ type: 'translate', id, texts })
+        this.ensureWorker(pairId).postMessage({ type: 'translate', id, pairId, texts })
       } catch {
         this.failWorker(new Error('local model worker could not start'))
       }
@@ -166,45 +180,47 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
       return
     }
     const message = value as Partial<OpusWorkerMessage>
-    if (!Number.isSafeInteger(message.id) || typeof message.type !== 'string') {
+    if (!Number.isSafeInteger(message.id) || typeof message.type !== 'string' || typeof message.pairId !== 'string') {
       this.failWorker(new Error('local model worker returned an invalid message'))
       return
     }
     const pending = this.pending.get(message.id as number)
     if (message.type === 'progress') {
-      if (pending === undefined || typeof message.status !== 'string') return
+      if (pending === undefined || message.pairId !== pending.pairId || typeof message.status !== 'string') return
       const file = typeof message.file === 'string' ? message.file : undefined
       const progress = typeof message.progress === 'number' && Number.isFinite(message.progress) ? message.progress : undefined
       const detail = file === undefined ? message.status : `${message.status}: ${file}`
-      opusModelStatus.set({ phase: 'loading', progress, detail })
+      opusModelStatus.set({ phase: 'loading', pairId: pending.pairId, progress, detail })
       return
     }
-    if (pending === undefined) return
+    if (pending === undefined || message.pairId !== pending.pairId) return
     this.pending.delete(message.id as number)
     if (message.type === 'result') {
       if (!Array.isArray(message.translations) || message.translations.length !== pending.expected || message.translations.some(item => typeof item !== 'string')) {
         const error = new Error('local model worker returned invalid translations')
-        opusModelStatus.set({ phase: 'error', detail: error.message })
+        opusModelStatus.set({ phase: 'error', pairId: pending.pairId, detail: error.message })
         pending.reject(error)
         return
       }
       const translations = (message.translations as string[]).map((item, index) => sanitizeOpusTranslation(item, pending.sources[index]))
-      opusModelStatus.set({ phase: 'ready', progress: 100, detail: 'Local model ready' })
+      opusModelStatus.set({ phase: 'ready', pairId: pending.pairId, progress: 100, detail: 'Local model ready' })
       pending.resolve(translations)
     } else if (message.type === 'error' && typeof message.error === 'string') {
       const error = new Error(message.error)
-      opusModelStatus.set({ phase: 'error', detail: error.message })
+      opusModelStatus.set({ phase: 'error', pairId: pending.pairId, detail: error.message })
       pending.reject(error)
     } else {
       const error = new Error('local model worker returned an invalid message')
-      opusModelStatus.set({ phase: 'error', detail: error.message })
+      opusModelStatus.set({ phase: 'error', pairId: pending.pairId, detail: error.message })
       pending.reject(error)
     }
   }
 
   private failWorker(error: Error, exposeError = true): void {
     const worker = this.worker
+    const pairId = this.workerPairId
     this.worker = undefined
+    this.workerPairId = undefined
     if (worker !== undefined) {
       worker.onmessage = null
       worker.onerror = null
@@ -212,6 +228,6 @@ export class BrowserLocalOpusBackend implements ClientTranslationBackend {
     }
     for (const pending of this.pending.values()) pending.reject(error)
     this.pending.clear()
-    opusModelStatus.set(exposeError ? { phase: 'error', detail: error.message } : { phase: 'idle' })
+    opusModelStatus.set(exposeError ? { phase: 'error', pairId, detail: error.message } : { phase: 'idle' })
   }
 }

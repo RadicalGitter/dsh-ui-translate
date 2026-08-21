@@ -2,12 +2,11 @@ import { env, pipeline, type TranslationPipeline } from '@huggingface/transforme
 import {
   OPUS_MAX_TEXT_LENGTH,
   OPUS_MAX_TEXTS,
-  OPUS_MODEL_ID,
-  OPUS_MODEL_REVISION,
   OPUS_WASM_BASE_URL,
   type OpusTranslateRequest,
   type OpusWorkerMessage,
 } from '../core/opus.ts'
+import { VETTED_LOCAL_PAIRS, type LocalPairId, type VettedLocalPair } from '../core/language-pairs.ts'
 
 interface WorkerScope {
   onmessage: ((event: MessageEvent<unknown>) => void) | null
@@ -34,23 +33,27 @@ type RunTranslation = (texts: string[], options: { max_new_tokens: number }) => 
 
 const createTranslationPipeline = pipeline as unknown as CreateTranslationPipeline
 let translatorPromise: Promise<TranslationPipeline> | undefined
+let translatorPairId: LocalPairId | undefined
 let activeRequestId = 0
+let activePairId = ''
 
-function progressFor(id: number, value: ProgressInfo): void {
+function progressFor(id: number, pairId: string, value: ProgressInfo): void {
   const status = typeof value.status === 'string' ? value.status : 'loading'
   const file = typeof value.file === 'string' ? value.file.split('/').pop() : undefined
   const progress = typeof value.progress === 'number' && Number.isFinite(value.progress)
     ? Math.max(0, Math.min(100, value.progress))
     : undefined
-  scope.postMessage({ type: 'progress', id, status, file, progress })
+  scope.postMessage({ type: 'progress', id, pairId, status, file, progress })
 }
 
-async function getTranslator(id: number): Promise<TranslationPipeline> {
-  translatorPromise ??= createTranslationPipeline('translation', OPUS_MODEL_ID, {
-    revision: OPUS_MODEL_REVISION,
+async function getTranslator(id: number, pairId: LocalPairId, pair: VettedLocalPair): Promise<TranslationPipeline> {
+  if (translatorPairId !== undefined && translatorPairId !== pairId) throw new Error('local model Worker cannot switch language pairs')
+  translatorPairId = pairId
+  translatorPromise ??= createTranslationPipeline('translation', pair.modelId, {
+    revision: pair.revision,
     device: 'wasm',
-    dtype: 'q8',
-    progress_callback: (value: unknown) => progressFor(activeRequestId || id, value as ProgressInfo),
+    dtype: pair.dtype,
+    progress_callback: (value: unknown) => progressFor(activeRequestId || id, activePairId || pairId, value as ProgressInfo),
   })
   return translatorPromise
 }
@@ -58,9 +61,10 @@ async function getTranslator(id: number): Promise<TranslationPipeline> {
 function validateRequest(value: unknown): OpusTranslateRequest {
   if (typeof value !== 'object' || value === null) throw new Error('invalid local translation request')
   const request = value as Partial<OpusTranslateRequest>
-  if (request.type !== 'translate' || !Number.isSafeInteger(request.id) || !Array.isArray(request.texts)) {
+  if (request.type !== 'translate' || !Number.isSafeInteger(request.id) || typeof request.pairId !== 'string' || !Array.isArray(request.texts)) {
     throw new Error('invalid local translation request')
   }
+  if (!(request.pairId in VETTED_LOCAL_PAIRS)) throw new Error('local translation pair is not vetted')
   if (request.texts.length === 0 || request.texts.length > OPUS_MAX_TEXTS) throw new Error('local translation batch is out of bounds')
   if (request.texts.some(text => typeof text !== 'string' || text.length === 0 || text.length > OPUS_MAX_TEXT_LENGTH || !CHINESE_RE.test(text))) {
     throw new Error('local translation text is out of bounds')
@@ -85,20 +89,30 @@ async function handle(value: unknown): Promise<void> {
   let id = typeof value === 'object' && value !== null && Number.isSafeInteger((value as { id?: unknown }).id)
     ? (value as { id: number }).id
     : 0
+  let pairId = typeof value === 'object' && value !== null && typeof (value as { pairId?: unknown }).pairId === 'string'
+    ? (value as { pairId: string }).pairId
+    : ''
   try {
     const request = validateRequest(value)
     id = request.id
+    pairId = request.pairId
+    const requestPairId = request.pairId
+    const pair = VETTED_LOCAL_PAIRS[requestPairId]
     activeRequestId = id
-    const translator = await getTranslator(id)
+    activePairId = requestPairId
+    const translator = await getTranslator(id, requestPairId, pair)
     const longest = Math.max(...request.texts.map(text => [...text].length))
     const maxNewTokens = Math.min(512, Math.max(48, longest * 2 + 24))
     const output = await (translator as unknown as RunTranslation)(request.texts, { max_new_tokens: maxNewTokens })
     const translations = extractTranslations(output, request.texts.length)
-    scope.postMessage({ type: 'result', id, translations })
+    scope.postMessage({ type: 'result', id, pairId, translations })
   } catch (error) {
-    scope.postMessage({ type: 'error', id, error: error instanceof Error ? error.message : 'local translation failed' })
+    scope.postMessage({ type: 'error', id, pairId, error: error instanceof Error ? error.message : 'local translation failed' })
   } finally {
-    if (activeRequestId === id) activeRequestId = 0
+    if (activeRequestId === id) {
+      activeRequestId = 0
+      activePairId = ''
+    }
   }
 }
 

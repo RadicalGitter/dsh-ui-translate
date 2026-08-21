@@ -1,4 +1,4 @@
-import { VETTED_LOCAL_PAIRS } from './language-pairs.ts'
+import { VETTED_LOCAL_PAIRS, type LocalPairId } from './language-pairs.ts'
 
 export const OPUS_MODEL_ID = VETTED_LOCAL_PAIRS['zh-en'].modelId
 export const OPUS_MODEL_REVISION = VETTED_LOCAL_PAIRS['zh-en'].revision
@@ -13,12 +13,14 @@ export const OPUS_MAX_TEXT_LENGTH = 320
 export interface OpusTranslateRequest {
   type: 'translate'
   id: number
+  pairId: LocalPairId
   texts: string[]
 }
 
 export interface OpusProgressMessage {
   type: 'progress'
   id: number
+  pairId: string
   status: string
   file?: string
   progress?: number
@@ -27,12 +29,14 @@ export interface OpusProgressMessage {
 export interface OpusResultMessage {
   type: 'result'
   id: number
+  pairId: string
   translations: string[]
 }
 
 export interface OpusErrorMessage {
   type: 'error'
   id: number
+  pairId: string
   error: string
 }
 
