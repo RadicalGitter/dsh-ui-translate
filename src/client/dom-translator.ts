@@ -13,6 +13,9 @@ const DOM_SOURCE_BATCH_SIZE = 8
 const FLUSH_DELAY_MS = 40
 const RETRY_DELAY_MS = 750
 const NEGATIVE_CACHE_MS = 30_000
+const STRUCTURED_TEXT_MIN_LENGTH = 256
+const TRANSCRIPT_MARKER_RE = /^\s*(?:Tool call|IN|OUT|Inspect|Think|Glob|Copy|UNKNOWN|Show \d+\b.*)\s*$/gimu
+const JSON_PROPERTY_LINE_RE = /^\s*"[^"\r\n]{1,80}"\s*:/gmu
 
 // These surfaces are never mutated because they are editable, explicitly
 // excluded, or owned by the translation controls themselves. Verbatim content
@@ -68,6 +71,26 @@ export function containsChinese(text: string): boolean {
   return CHINESE_RE.test(text)
 }
 
+function matchCount(value: string, pattern: RegExp): number {
+  pattern.lastIndex = 0
+  let count = 0
+  while (pattern.exec(value) !== null) count += 1
+  pattern.lastIndex = 0
+  return count
+}
+
+// A text node can contain an entire rendered tool transcript or JSON payload.
+// Translating that node because one nested description contains Han characters
+// corrupts its mostly-verbatim English, keys, paths, and output formatting.
+export function looksLikeStructuredVerbatimText(value: string): boolean {
+  if (value.length < STRUCTURED_TEXT_MIN_LENGTH) return false
+  if (matchCount(value, TRANSCRIPT_MARKER_RE) >= 3) return true
+  const jsonProperties = matchCount(value, JSON_PROPERTY_LINE_RE)
+  return jsonProperties >= 3
+    && /[\[{]/u.test(value)
+    && /[\]}]/u.test(value)
+}
+
 export function isSafeLeafTextNode(
   node: Text,
   allowBrowserLocalModelText = false,
@@ -78,6 +101,7 @@ export function isSafeLeafTextNode(
   const text = node.data.trim()
   const containsSource = allowBrowserLocalModelText ? containsSourceLanguage(text, localPair) : containsChinese(text)
   if (text.length === 0 || (!allowBrowserLocalModelText && text.length > MAX_STATIC_TEXT_LENGTH) || !containsSource) return false
+  if (looksLikeStructuredVerbatimText(text)) return false
   if (parent.isContentEditable || parent.closest('[hidden],[aria-hidden="true"],[inert]') !== null) return false
   if (parent.closest(ALWAYS_SKIP_SELECTOR) !== null) return false
   const verbatim = parent.closest(VERBATIM_SKIP_SELECTOR)

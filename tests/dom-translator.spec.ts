@@ -1,7 +1,7 @@
 import { JSDOM } from 'jsdom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ClientBackendRegistry, createDefaultClientBackends, type ClientTranslationBackend } from '../src/client/backends.ts'
-import { isSafeLeafTextNode, StaticDomTranslator } from '../src/client/dom-translator.ts'
+import { isSafeLeafTextNode, looksLikeStructuredVerbatimText, StaticDomTranslator } from '../src/client/dom-translator.ts'
 import { resolveSettings } from '../src/client/settings-model.ts'
 import { TRANSLATION_HOVER_DELAY_MS } from '../src/client/translation-controls.ts'
 
@@ -168,6 +168,51 @@ describe('safe leaf selection', () => {
     const dom = createDom(html)
     const walker = dom.window.document.createTreeWalker(dom.window.document.body, dom.window.NodeFilter.SHOW_TEXT)
     expect(isSafeLeafTextNode(walker.nextNode() as Text, true)).toBe(false)
+  })
+
+  it('rejects a rendered tool transcript when only a nested JSON description is Chinese', () => {
+    const transcript = `
+Tool call
+capability · search
+IN
+{
+  "action": "search",
+  "query": "read_image display inspect local image",
+  "scope": "tools",
+  "limit": 5
+}
+OUT
+{
+  "kind": "search",
+  "results": [
+    {
+      "kind": "tool",
+      "name": "import_local_jsonl",
+      "description": "从本地任意 JSONL 会话文件导入历史对话为可继续的 DSH 会话。"
+    }
+  ]
+}
+Inspect
+Think
+**Attempting schema call despite suspicion**
+`.repeat(2)
+    const dom = createDom('<pre data-dsh-translate="prose"></pre>')
+    const pre = dom.window.document.querySelector('pre')!
+    pre.textContent = transcript
+    const node = pre.firstChild as Text
+
+    expect(looksLikeStructuredVerbatimText(transcript)).toBe(true)
+    expect(isSafeLeafTextNode(node, true)).toBe(false)
+  })
+
+  it('does not mistake long Chinese prose for structured output', () => {
+    const prose = '这是普通的中文说明文字，用来解释项目背景、操作步骤和注意事项。'.repeat(20)
+    const dom = createDom('<pre data-dsh-translate="prose"></pre>')
+    const pre = dom.window.document.querySelector('pre')!
+    pre.textContent = prose
+
+    expect(looksLikeStructuredVerbatimText(prose)).toBe(false)
+    expect(isSafeLeafTextNode(pre.firstChild as Text, true)).toBe(true)
   })
 })
 
